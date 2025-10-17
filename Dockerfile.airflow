@@ -1,0 +1,37 @@
+# Utiliser l'image officielle d'Airflow comme base
+FROM apache/airflow:2.8.1
+
+USER root
+
+# Installer Java, HDFS client et les dépendances système nécessaires
+RUN apt-get update && apt-get install -y \
+    openjdk-17-jdk \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && wget https://archive.apache.org/dist/hadoop/common/hadoop-3.2.1/hadoop-3.2.1.tar.gz \
+    && tar -xzf hadoop-3.2.1.tar.gz -C /opt/ \
+    && rm hadoop-3.2.1.tar.gz \
+    && mv /opt/hadoop-3.2.1 /opt/hadoop
+
+# Télécharger et installer Spark
+RUN mkdir -p /opt/spark && \
+    wget https://archive.apache.org/dist/spark/spark-3.1.2/spark-3.1.2-bin-hadoop3.2.tgz && \
+    tar -xf spark-3.1.2-bin-hadoop3.2.tgz -C /opt/spark --strip-components=1 && \
+    rm spark-3.1.2-bin-hadoop3.2.tgz
+
+# Créer le répertoire des jobs Spark
+RUN mkdir -p /opt/spark/jobs
+
+# Définir les variables d'environnement
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+    SPARK_HOME=/opt/spark \
+    HADOOP_HOME=/opt/hadoop \
+    HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop \
+    PATH=$PATH:/opt/hadoop/bin:/opt/hadoop/sbin
+ENV PATH=$PATH:$SPARK_HOME/bin:$JAVA_HOME/bin
+
+USER airflow
+
+# Installer les providers nécessaires pour Airflow
+RUN pip install --no-cache-dir apache-airflow-providers-apache-spark==4.1.0

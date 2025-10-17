@@ -1,0 +1,9 @@
+# Python virtual environment
+.venv/
+__pycache__/
+
+# Logs
+logs/
+
+# Data files
+data/
