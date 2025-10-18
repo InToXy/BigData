@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y \
     openjdk-17-jdk \
     wget \
     curl \
+    libkrb5-dev \
+    krb5-user \
     && rm -rf /var/lib/apt/lists/* \
     && wget https://archive.apache.org/dist/hadoop/common/hadoop-3.2.1/hadoop-3.2.1.tar.gz \
     && tar -xzf hadoop-3.2.1.tar.gz -C /opt/ \
@@ -33,5 +35,8 @@ ENV PATH=$PATH:$SPARK_HOME/bin:$JAVA_HOME/bin
 
 USER airflow
 
-# Installer les providers nécessaires pour Airflow
-RUN pip install --no-cache-dir apache-airflow-providers-apache-spark==4.1.0
+# Installer les providers et dépendances nécessaires pour Airflow
+RUN pip install --no-cache-dir \
+    apache-airflow-providers-apache-spark==4.1.0 \
+    apache-airflow-providers-apache-hdfs==3.2.1 \
+    hdfs>=2.7.0

@@ -25,8 +25,6 @@ Before you begin, ensure you have the following installed on your system:
 3.  **Download the Data:**
     This repository does not include the source data files due to their large size. Your team must download them manually and place them in the correct directories.
 
-    **Source des données :** [Ajoutez ici le lien vers la source des données, par exemple data.gouv.fr]
-
     Once downloaded, the file structure inside the `data/source` directory must be as follows:
     ```
     data/

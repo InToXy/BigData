@@ -32,16 +32,21 @@ services:
 
   # --- Spark Ecosystem ---
   spark-master:
-    image: bde2020/spark-master:3.1.2-hadoop3.2
+    build:
+      context: .
+      dockerfile: Dockerfile.spark-worker
     container_name: spark-master
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
     ports:
-      - "8081:8080"
+      - "8080:8080"
       - "7077:7077"
     environment:
-      - INIT_DAEMON_STEP=setup_spark
-      - SPARK_CONF_spark_sql_warehouse_dir=/data/warehouse
-      - SPARK_CONF_spark_driver_extraJavaOptions=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
-      - SPARK_CONF_spark_executor_extraJavaOptions=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
+      - SPARK_SQL_WAREHOUSE_DIR=/data/warehouse
+      - SPARK_DRIVER_JAVA_OPTS=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
+      - SPARK_EXECUTOR_JAVA_OPTS=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
       - HADOOP_CONF_DIR=/etc/hadoop
     volumes:
       - ./spark_jobs:/opt/spark/jobs
@@ -51,23 +56,26 @@ services:
       - data-stack
 
   spark-worker:
-    image: bde2020/spark-worker:3.1.2-hadoop3.2
+    build:
+      context: .
+      dockerfile: Dockerfile.spark-worker
     container_name: spark-worker
     depends_on:
       - spark-master
     environment:
-      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
       - SPARK_WORKER_MEMORY=4G
       - SPARK_WORKER_CORES=2
-      - SPARK_CONF_spark_driver_extraJavaOptions=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
-      - SPARK_CONF_spark_executor_extraJavaOptions=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
+      - SPARK_DRIVER_JAVA_OPTS=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
+      - SPARK_EXECUTOR_JAVA_OPTS=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
       - HADOOP_CONF_DIR=/etc/hadoop
     volumes:
       - ./config/hadoop:/etc/hadoop
       - ./spark_jobs:/opt/spark/jobs
       - ./data:/data
     ports:
-      - "8082:8080"
+      - "8081:8081"
     networks:
       - data-stack
 
@@ -90,7 +98,7 @@ services:
       - ./spark_jobs:/opt/spark/jobs
       - ./data:/data
     ports:
-      - "8080:8080"
+      - "8088:8080"
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@airflow-db:5432/${AIRFLOW_DB_NAME}
