@@ -1,259 +1,222 @@
-version: '3'
-
 services:
-  namenode:
-    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
-    container_name: namenode
-    volumes:
-      - hadoop_namenode:/hadoop/dfs/name
-      - ./config/hadoop:/etc/hadoop
-      - ./data:/data
+  # ============================================================
+  # MINIO - Data Lake
+  # ============================================================
+  minio:
+    image: minio/minio:latest
+    container_name: chu_minio
+    command: server /data --console-address ":9001"
     environment:
-      - CLUSTER_NAME=test
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
     ports:
-      - "9870:9870"
       - "9000:9000"
-    networks:
-      - data-stack
-
-  datanode:
-    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
-    container_name: datanode
-    depends_on:
-      - namenode
+      - "9001:9001"
     volumes:
-      - hadoop_datanode:/hadoop/dfs/data
-      - ./config/hadoop:/etc/hadoop:ro
+      - minio_data:/data
+    networks:
+      - bigdata_network
+    restart: unless-stopped
+
+  minio-setup:
+    image: minio/mc:latest
+    container_name: chu_minio_setup
+    depends_on:
+      - minio
+    networks:
+      - bigdata_network
+    entrypoint: >
+      /bin/sh -c "
+      sleep 10;
+      /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin123;
+      /usr/bin/mc mb myminio/bronze || true;
+      /usr/bin/mc mb myminio/silver || true;
+      /usr/bin/mc mb myminio/gold || true;
+      /usr/bin/mc mb myminio/airflow-logs || true;
+      echo 'Buckets MinIO créés';
+      exit 0;
+      "
+
+  # ============================================================
+  # REDIS
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: chu_redis
     ports:
-      - "9864:9864"
+      - "6379:6379"
     networks:
-      - data-stack
+      - bigdata_network
+    restart: unless-stopped
 
-  spark-master:
-    build:
-      context: .
-      dockerfile: Dockerfile.spark-worker
-    container_name: spark-master
-    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
-    ports:
-      - "8080:8080"
-      - "7077:7077"
-    environment:
-      - SPARK_SQL_WAREHOUSE_DIR=/data/warehouse
-      - SPARK_DRIVER_JAVA_OPTS=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
-      - SPARK_EXECUTOR_JAVA_OPTS=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
-      - SPARK_MASTER_HOST=spark-master
-      - SPARK_MASTER_PORT=7077
-      - SPARK_MASTER_WEBUI_PORT=8080
-      - HADOOP_CONF_DIR=/etc/hadoop
-      - SPARK_CONF_spark_jars_packages=org.postgresql:postgresql:42.5.0
-      - EXTERNAL_POSTGRES_HOST=airflow-db
-      - EXTERNAL_POSTGRES_PORT=5432
-      - EXTERNAL_POSTGRES_DB=${AIRFLOW_DB_NAME}
-      - EXTERNAL_POSTGRES_USER=${AIRFLOW_DB_USER}
-      - EXTERNAL_POSTGRES_PASSWORD=${AIRFLOW_DB_PASSWORD}
-    volumes:
-      - ./spark_jobs:/opt/spark/jobs
-      - ./data:/data
-      - ./config/hadoop:/etc/hadoop:ro
-    depends_on:
-      - namenode
-      - airflow-db
-    networks:
-      - data-stack
-
-  spark-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile.spark-worker
-    container_name: spark-worker
-    depends_on:
-      - spark-master
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=4G
-      - SPARK_WORKER_CORES=2
-      - SPARK_DRIVER_JAVA_OPTS=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
-      - SPARK_EXECUTOR_JAVA_OPTS=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
-      - HADOOP_CONF_DIR=/etc/hadoop
-    volumes:
-      - ./config/hadoop:/etc/hadoop
-      - ./spark_jobs:/opt/spark/jobs
-      - ./data:/data
-    ports:
-      - "8081:8081"
-    networks:
-      - data-stack
-
-  airflow-webserver:
-    build:
-      context: .
-      dockerfile: Dockerfile.airflow
-    container_name: airflow-webserver
-    restart: always
-    depends_on:
-      - airflow-init
-      - namenode
-    user: "${AIRFLOW_UID:-50000}"
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - airflow_logs:/opt/airflow/logs
-      - ./config/spark:/opt/airflow/config/spark
-      - ./config/hadoop:/opt/hadoop/etc/hadoop
-      - ./spark_jobs:/opt/spark/jobs
-      - ./data:/data
-    ports:
-      - "8088:8080"
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@airflow-db:5432/${AIRFLOW_DB_NAME}
-      - AIRFLOW__CORE__FERNET_KEY=yIkGYM4sjhuCcKI306HUVBzs_fJOEHpfysLnC6cRNKA=
-      - AIRFLOW__CORE__PARALLELISM=4
-      - AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT=600
-      - AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT=120
-      - AIRFLOW__LOGGING__LOGGING_LEVEL=INFO
-      - SPARK_HOME=/opt/spark
-      - PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9-src.zip
-      - SPARK_CONF_spark_jars_packages=org.postgresql:postgresql:42.5.0,com.crealytics:spark-excel_2.12:3.3.1_0.18.7
-      - SPARK_MASTER=spark://spark-master:7077
-      - SPARK_DRIVER_MEMORY=2g
-      - SPARK_EXECUTOR_MEMORY=2g
-      - SPARK_EXECUTOR_CORES=2
-      - SPARK_DEFAULT_PARALLELISM=4
-      - SPARK_CONF_spark_driver_extraJavaOptions=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
-      - SPARK_CONF_spark_executor_extraJavaOptions=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
-      - HADOOP_HOME=/opt/hadoop
-      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
-      - HDFS_NAMENODE_URL=hdfs://namenode:9000
-    command: webserver
-    networks:
-      - data-stack
-
-  airflow-scheduler:
-    build:
-      context: .
-      dockerfile: Dockerfile.airflow
-    container_name: airflow-scheduler
-    restart: always
-    depends_on:
-      - airflow-init
-      - namenode
-    user: "${AIRFLOW_UID:-50000}"
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - airflow_logs:/opt/airflow/logs
-      - ./config/spark:/opt/airflow/config/spark
-      - ./config/hadoop:/opt/hadoop/etc/hadoop
-      - ./spark_jobs:/opt/spark/jobs
-      - ./data:/data
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@airflow-db:5432/${AIRFLOW_DB_NAME}
-      - AIRFLOW__CORE__FERNET_KEY=yIkGYM4sjhuCcKI306HUVBzs_fJOEHpfysLnC6cRNKA=
-      - AIRFLOW__CORE__PARALLELISM=4
-      - AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT=600
-      - AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT=120
-      - AIRFLOW__LOGGING__LOGGING_LEVEL=INFO
-      - SPARK_HOME=/opt/spark
-      - PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9-src.zip
-      - SPARK_CONF_spark_jars_packages=org.postgresql:postgresql:42.5.0,com.crealytics:spark-excel_2.12:3.3.1_0.18.7
-      - SPARK_MASTER=spark://spark-master:7077
-      - SPARK_DRIVER_MEMORY=2g
-      - SPARK_EXECUTOR_MEMORY=2g
-      - SPARK_EXECUTOR_CORES=2
-      - SPARK_DEFAULT_PARALLELISM=4
-      - SPARK_CONF_spark_driver_extraJavaOptions=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
-      - SPARK_CONF_spark_executor_extraJavaOptions=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
-      - HADOOP_HOME=/opt/hadoop
-      - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
-      - HDFS_NAMENODE_URL=hdfs://namenode:9000
-    command: scheduler
-    networks:
-      - data-stack
-
+  # ============================================================
+  # AIRFLOW
+  # ============================================================
   airflow-db:
-    image: postgres:13
-    container_name: airflow-db
+    image: postgres:15-alpine
+    container_name: chu_airflow_db
     environment:
-      - POSTGRES_USER=${AIRFLOW_DB_USER}
-      - POSTGRES_PASSWORD=${AIRFLOW_DB_PASSWORD}
-      - POSTGRES_DB=${AIRFLOW_DB_NAME}
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow123
+      POSTGRES_DB: airflow
     volumes:
-      - postgres-db-volume:/var/lib/postgresql/data
-      - ./scripts:/scripts
+      - airflow_db_data:/var/lib/postgresql/data
     networks:
-      - data-stack
+      - bigdata_network
+    restart: unless-stopped
 
   airflow-init:
-    build:
-      context: .
-      dockerfile: Dockerfile.airflow
-    container_name: airflow-init
-    entrypoint: /bin/bash
-    command: >
-      -c '
-      airflow db upgrade &&
-      airflow users create -r Admin -u admin -p admin -f Anonymous -l Admin -e admin@example.org &&
-      airflow connections add "spark_default" --conn-type "spark" --conn-host "spark://spark-master" --conn-port "7077" --conn-extra "{\"driver_memory\": \"2g\", \"executor_memory\": \"2g\", \"num_executors\": \"2\", \"extra_jars\": [\"/opt/spark/jars/postgresql-42.5.0.jar\", \"/opt/spark/jars/spark-excel_2.12-3.3.1_0.18.7.jar\"], \"java_options\": \"--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED\"}"'
-    user: "${AIRFLOW_UID:-50000}"
+    image: apache/airflow:2.8.1-python3.11
+    container_name: chu_airflow_init
+    environment:
+      AIRFLOW_UID: '1000'
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow123@airflow-db/airflow
+      AIRFLOW__CORE__FERNET_KEY: 'UKMzEm3yIuFYEq1y3-2FxPNWSVwRASpahmQ9kQfEr8E='
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-postgres apache-airflow-providers-amazon pandas pyarrow boto3 psycopg2-binary s3fs
     depends_on:
       - airflow-db
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@airflow-db:5432/${AIRFLOW_DB_NAME}
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
     networks:
-      - data-stack
-
-  hive-server:
-    image: bde2020/hive:2.3.2-postgresql-metastore
-    container_name: hive-server
-    depends_on:
-      - namenode
-      - datanode
-    env_file:
-      - ./config/hive/hadoop-hive.env
-    environment:
-      - HIVE_CORE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-db/metastore
-    ports:
-      - "10000:10000"
-      - "10002:10002"
+      - bigdata_network
     volumes:
-      - ./config/hive:/opt/hive/conf
-    networks:
-      - data-stack
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+    command: >
+      bash -c "
+        airflow db init &&
+        airflow users create --username admin --password admin123 --firstname Admin --lastname User --role Admin --email admin@chu.com || true
+      "
 
-  hive-metastore:
-    image: bde2020/hive:2.3.2-postgresql-metastore
-    container_name: hive-metastore
+  airflow-webserver:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: chu_airflow_webserver
     depends_on:
-      - namenode
-      - datanode
-      - hive-metastore-db
-    env_file:
-      - ./config/hive/hadoop-hive.env
-    command: /opt/hive/bin/hive --service metastore
+      - airflow-init
+      - minio
     environment:
-      - HIVE_CORE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-db/metastore
+      AIRFLOW_UID: '1000'
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow123@airflow-db/airflow
+      AIRFLOW__CORE__FERNET_KEY: 'UKMzEm3yIuFYEq1y3-2FxPNWSVwRASpahmQ9kQfEr8E='
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+      # Connexion au PostgreSQL EXISTANT (bigdata_postgres)
+      AIRFLOW_CONN_POSTGRES_CHU: postgresql://admin:admin123@bigdata_postgres:5432/healthcare_data
+      _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-postgres apache-airflow-providers-amazon pandas pyarrow boto3 psycopg2-binary s3fs
     ports:
-      - "9083:9083"
+      - "8080:8080"
     volumes:
-      - ./config/hive:/opt/hive/conf
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./data:/opt/airflow/data
     networks:
-      - data-stack
+      - bigdata_network
+    restart: unless-stopped
+    command: airflow webserver
 
-  hive-metastore-db:
-    image: bde2020/hive-metastore-postgresql:2.3.0
-    container_name: hive-metastore-db
+  airflow-scheduler:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: chu_airflow_scheduler
+    depends_on:
+      - airflow-webserver
+    environment:
+      AIRFLOW_UID: '1000'
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow123@airflow-db/airflow
+      AIRFLOW__CORE__FERNET_KEY: 'UKMzEm3yIuFYEq1y3-2FxPNWSVwRASpahmQ9kQfEr8E='
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW_CONN_POSTGRES_CHU: postgresql://admin:admin123@bigdata_postgres:5432/healthcare_data
+      _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-postgres apache-airflow-providers-amazon pandas pyarrow boto3 psycopg2-binary s3fs
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./data:/opt/airflow/data
     networks:
-      - data-stack
+      - bigdata_network
+    restart: unless-stopped
+    command: airflow scheduler
 
-networks:
-  data-stack:
+  # ============================================================
+  # JUPYTER LAB
+  # ============================================================
+  jupyter:
+    image: jupyter/pyspark-notebook:latest
+    container_name: chu_jupyter
+    env_file:
+      - .env
+    depends_on:
+      - minio
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+      GRANT_SUDO: "yes"
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./spark_jobs:/home/jovyan/jobs
+      - ./jupyter/notebooks:/home/jovyan/work
+      - ./data:/data
+      - ./jars:/home/jovyan/jars
+    networks:
+      - bigdata_network
+    restart: unless-stopped
+    command: start-notebook.sh --NotebookApp.token='admin123' --NotebookApp.password=''
+
+  # ============================================================
+  # SUPERSET
+  # ============================================================
+  superset-db:
+    image: postgres:15-alpine
+    container_name: chu_superset_db
+    environment:
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: superset123
+      POSTGRES_DB: superset
+    volumes:
+      - superset_db_data:/var/lib/postgresql/data
+    networks:
+      - bigdata_network
+    restart: unless-stopped
+
+  superset:
+    image: apache/superset:3.0.0
+    container_name: chu_superset
+    depends_on:
+      - superset-db
+    environment:
+      SUPERSET_SECRET_KEY: 'thisISaSECRET_1234567890abcdefghijklmnopqrstuvwxyz'
+      DATABASE_DIALECT: postgresql
+      DATABASE_HOST: superset-db
+      DATABASE_PORT: 5432
+      DATABASE_DB: superset
+      DATABASE_USER: superset
+      DATABASE_PASSWORD: superset123
+    ports:
+      - "8088:8088"
+    volumes:
+      - ./superset/config:/app/superset_home
+    networks:
+      - bigdata_network
+    restart: unless-stopped
+    command: >
+      bash -c "
+        superset db upgrade &&
+        superset fab create-admin --username admin --firstname Admin --lastname User --email admin@chu.com --password admin123 || true &&
+        superset init &&
+        /usr/bin/run-server.sh
+      "
 
 volumes:
-  hadoop_namenode:
-  hadoop_datanode:
-  postgres-db-volume:
-  airflow_logs:
+  minio_data:
+  airflow_db_data:
+  superset_db_data:
+
+# ============================================================
+# RÉSEAU
+# ============================================================
+networks:
+  bigdata_network:
+    name: bigdata_network
+    driver: bridge
