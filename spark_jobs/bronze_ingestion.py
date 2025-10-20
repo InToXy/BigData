@@ -8,12 +8,25 @@ def get_spark_session():
     """Initialise et retourne une session Spark configurée pour notre stack."""
     return SparkSession.builder \
         .appName("Bronze Ingestion Pipeline") \
+        .config("fs.defaultFS", "hdfs://namenode:8020") \
         .enableHiveSupport() \
         .getOrCreate()
 
 def clean_col_names(df):
     """Nettoie et standardise les noms de colonnes d'un DataFrame."""
-    new_cols = [c.strip().replace(' ', '_').replace(';', '_').lower() for c in df.columns]
+    def clean_name(name):
+        # Convertir en minuscules
+        name = name.lower()
+        # Remplacer les caractères spéciaux et espaces par _
+        import re
+        name = re.sub(r'[^a-z0-9]', '_', name)
+        # Remplacer les multiples _ par un seul
+        name = re.sub(r'_+', '_', name)
+        # Supprimer les _ au début et à la fin
+        name = name.strip('_')
+        return name
+
+    new_cols = [clean_name(c) for c in df.columns]
     return df.toDF(*new_cols)
 
 def process_source(spark, config):
@@ -85,7 +98,7 @@ def process_source(spark, config):
             else:
                 print(f"Avertissement : Colonnes SK {sk_cols} non trouvées pour {output_table_name}. Clé non créée.")
 
-        bronze_path = f"hdfs://namenode:9000/bronze/{output_table_name}"
+        bronze_path = f"hdfs://namenode:8020/user/airflow/bronze/{output_table_name}"
         df.write.mode("overwrite").parquet(bronze_path)
         
         print(f"Succès : La table '{output_table_name}' a été écrite dans la couche Bronze.")
@@ -125,7 +138,7 @@ if __name__ == "__main__":
         {"type": "csv", "source_name": "resultats-esatis48h-mco-open-data-2019.csv", "path": "file:///data/source/csv/resultats-esatis48h-mco-open-data-2019.csv", "delimiter": ";", "decimal": ",", "output_table": "satisfaction_2019_esatis48h", "pii_columns": [], "sk_columns": ["finess"]},
         {"type": "csv", "source_name": "resultats-esatisca-mco-open-data-2019.csv", "path": "file:///data/source/csv/resultats-esatisca-mco-open-data-2019.csv", "delimiter": ";", "decimal": ",", "output_table": "satisfaction_2019_esatisca", "pii_columns": [], "sk_columns": ["finess"]},
         {"type": "csv", "source_name": "resultats-iqss-open-data-2019.csv", "path": "file:///data/source/csv/resultats-iqss-open-data-2019.csv", "delimiter": ";", "decimal": ",", "output_table": "satisfaction_2019_iqss", "pii_columns": [], "sk_columns": ["finess"]},
-        {"type": "excel", "source_name": "dpa_had_recueil2016_donnee2015_donnees.xlsx", "path": "file:///data/source/xlsx/dpa_had_recueil2016_donnee2015_donnees.xlsx", "sheet_name": "Feuil1", "output_table": "satisfaction_2015_dpa_had_excel", "pii_columns": [], "sk_columns": ["finess"]},
+        {"type": "excel", "source_name": "dpa_had_recueil2016_donnee2015_donnees.xlsx", "path": "file:///data/source/xlsx/dpa_had_recueil2016_donnee2015_donnees.xlsx", "sheet_name": "dpa_had_recueil2016_donnee2015_", "output_table": "satisfaction_2015_dpa_had_excel", "pii_columns": [], "sk_columns": ["finess"]},
         {"type": "excel", "source_name": "resultats-esatisca-mco-open-data-2020.xlsx", "path": "file:///data/source/xlsx/resultats-esatisca-mco-open-data-2020.xlsx", "sheet_name": "Resultats", "output_table": "satisfaction_2020_esatisca", "pii_columns": [], "sk_columns": ["finess"]},
         {"type": "excel", "source_name": "resultats-esatis48h-mco-open-data-2020.xlsx", "path": "file:///data/source/xlsx/resultats-esatis48h-mco-open-data-2020.xlsx", "sheet_name": "Resultats", "output_table": "satisfaction_2020_esatis48h", "pii_columns": [], "sk_columns": ["finess"]},
         {"type": "excel", "source_name": "resultats-iqss-open-data-2020.xlsx", "path": "file:///data/source/xlsx/resultats-iqss-open-data-2020.xlsx", "sheet_name": "Resultats", "output_table": "satisfaction_2020_iqss", "pii_columns": [], "sk_columns": ["finess"]},

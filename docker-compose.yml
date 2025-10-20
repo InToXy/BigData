@@ -1,13 +1,12 @@
-version: '3.8'
+version: '3'
 
 services:
-  # --- Hadoop Ecosystem ---
   namenode:
     image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
     container_name: namenode
     volumes:
       - hadoop_namenode:/hadoop/dfs/name
-      - ./config/hadoop:/etc/hadoop:ro
+      - ./config/hadoop:/etc/hadoop
       - ./data:/data
     environment:
       - CLUSTER_NAME=test
@@ -30,7 +29,6 @@ services:
     networks:
       - data-stack
 
-  # --- Spark Ecosystem ---
   spark-master:
     build:
       context: .
@@ -48,10 +46,19 @@ services:
       - SPARK_MASTER_PORT=7077
       - SPARK_MASTER_WEBUI_PORT=8080
       - HADOOP_CONF_DIR=/etc/hadoop
+      - SPARK_CONF_spark_jars_packages=org.postgresql:postgresql:42.5.0
+      - EXTERNAL_POSTGRES_HOST=airflow-db
+      - EXTERNAL_POSTGRES_PORT=5432
+      - EXTERNAL_POSTGRES_DB=${AIRFLOW_DB_NAME}
+      - EXTERNAL_POSTGRES_USER=${AIRFLOW_DB_USER}
+      - EXTERNAL_POSTGRES_PASSWORD=${AIRFLOW_DB_PASSWORD}
     volumes:
       - ./spark_jobs:/opt/spark/jobs
       - ./data:/data
       - ./config/hadoop:/etc/hadoop:ro
+    depends_on:
+      - namenode
+      - airflow-db
     networks:
       - data-stack
 
@@ -79,7 +86,6 @@ services:
     networks:
       - data-stack
 
-  # --- Airflow ---
   airflow-webserver:
     build:
       context: .
@@ -88,13 +94,13 @@ services:
     restart: always
     depends_on:
       - airflow-init
+      - namenode
     user: "${AIRFLOW_UID:-50000}"
     volumes:
       - ./dags:/opt/airflow/dags
-      - ./logs:/opt/airflow/logs
+      - airflow_logs:/opt/airflow/logs
       - ./config/spark:/opt/airflow/config/spark
       - ./config/hadoop:/opt/hadoop/etc/hadoop
-      - ./scripts:/opt/airflow/scripts
       - ./spark_jobs:/opt/spark/jobs
       - ./data:/data
     ports:
@@ -107,7 +113,6 @@ services:
       - AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT=600
       - AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT=120
       - AIRFLOW__LOGGING__LOGGING_LEVEL=INFO
-      # Spark Configuration
       - SPARK_HOME=/opt/spark
       - PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9-src.zip
       - SPARK_CONF_spark_jars_packages=org.postgresql:postgresql:42.5.0,com.crealytics:spark-excel_2.12:3.3.1_0.18.7
@@ -118,10 +123,6 @@ services:
       - SPARK_DEFAULT_PARALLELISM=4
       - SPARK_CONF_spark_driver_extraJavaOptions=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
       - SPARK_CONF_spark_executor_extraJavaOptions=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
-      # Hive Configuration
-      - HIVE_HOME=/opt/hive
-      - HIVE_METASTORE_URIS=thrift://hive-metastore:9083
-      - HIVE_SERVER2_THRIFT_URL=jdbc:hive2://hive-server:10000
       - HADOOP_HOME=/opt/hadoop
       - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
       - HDFS_NAMENODE_URL=hdfs://namenode:9000
@@ -137,10 +138,11 @@ services:
     restart: always
     depends_on:
       - airflow-init
+      - namenode
     user: "${AIRFLOW_UID:-50000}"
     volumes:
       - ./dags:/opt/airflow/dags
-      - ./logs:/opt/airflow/logs
+      - airflow_logs:/opt/airflow/logs
       - ./config/spark:/opt/airflow/config/spark
       - ./config/hadoop:/opt/hadoop/etc/hadoop
       - ./spark_jobs:/opt/spark/jobs
@@ -153,7 +155,6 @@ services:
       - AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT=600
       - AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT=120
       - AIRFLOW__LOGGING__LOGGING_LEVEL=INFO
-      # Spark Configuration
       - SPARK_HOME=/opt/spark
       - PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9-src.zip
       - SPARK_CONF_spark_jars_packages=org.postgresql:postgresql:42.5.0,com.crealytics:spark-excel_2.12:3.3.1_0.18.7
@@ -164,10 +165,6 @@ services:
       - SPARK_DEFAULT_PARALLELISM=4
       - SPARK_CONF_spark_driver_extraJavaOptions=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
       - SPARK_CONF_spark_executor_extraJavaOptions=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
-      # Hive Configuration
-      - HIVE_HOME=/opt/hive
-      - HIVE_METASTORE_URIS=thrift://hive-metastore:9083
-      - HIVE_SERVER2_THRIFT_URL=jdbc:hive2://hive-server:10000
       - HADOOP_HOME=/opt/hadoop
       - HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
       - HDFS_NAMENODE_URL=hdfs://namenode:9000
@@ -175,7 +172,6 @@ services:
     networks:
       - data-stack
 
-  # --- PostgreSQL for Airflow ---
   airflow-db:
     image: postgres:13
     container_name: airflow-db
@@ -185,10 +181,10 @@ services:
       - POSTGRES_DB=${AIRFLOW_DB_NAME}
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
+      - ./scripts:/scripts
     networks:
       - data-stack
 
-  # --- Airflow Init (for database initialization) ---
   airflow-init:
     build:
       context: .
@@ -197,9 +193,9 @@ services:
     entrypoint: /bin/bash
     command: >
       -c '
-      airflow db init &&
-      airflow connections add "spark_default" --conn-type "spark" --conn-host "spark://spark-master" --conn-port "7077" --conn-extra "{\"driver_memory\": \"2g\", \"executor_memory\": \"2g\", \"num_executors\": \"2\", \"extra_jars\": [\"/opt/spark/jars/postgresql-42.5.0.jar\", \"/opt/spark/jars/spark-excel_2.12-3.3.1_0.18.7.jar\"], \"java_options\": \"--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED\"}" &&
-      airflow users create --username admin --password admin --firstname Anonymous --lastname Admin --role Admin --email admin@example.org'
+      airflow db upgrade &&
+      airflow users create -r Admin -u admin -p admin -f Anonymous -l Admin -e admin@example.org &&
+      airflow connections add "spark_default" --conn-type "spark" --conn-host "spark://spark-master" --conn-port "7077" --conn-extra "{\"driver_memory\": \"2g\", \"executor_memory\": \"2g\", \"num_executors\": \"2\", \"extra_jars\": [\"/opt/spark/jars/postgresql-42.5.0.jar\", \"/opt/spark/jars/spark-excel_2.12-3.3.1_0.18.7.jar\"], \"java_options\": \"--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED\"}"'
     user: "${AIRFLOW_UID:-50000}"
     depends_on:
       - airflow-db
@@ -210,7 +206,6 @@ services:
     networks:
       - data-stack
 
-  # --- Hive ---
   hive-server:
     image: bde2020/hive:2.3.2-postgresql-metastore
     container_name: hive-server
@@ -261,3 +256,4 @@ volumes:
   hadoop_namenode:
   hadoop_datanode:
   postgres-db-volume:
+  airflow_logs:

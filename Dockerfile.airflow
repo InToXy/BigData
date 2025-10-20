@@ -22,8 +22,11 @@ RUN mkdir -p /opt/spark && \
     tar -xf spark-3.1.2-bin-hadoop3.2.tgz -C /opt/spark --strip-components=1 && \
     rm spark-3.1.2-bin-hadoop3.2.tgz
 
-# Créer le répertoire des jobs Spark
-RUN mkdir -p /opt/spark/jobs
+# Créer le répertoire des jobs Spark et les dossiers Airflow
+RUN mkdir -p /opt/spark/jobs && \
+    mkdir -p /opt/airflow/logs && \
+    chown -R airflow:0 /opt/airflow && \
+    chmod -R g+rw /opt/airflow
 
 # Définir les variables d'environnement
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
@@ -38,5 +41,7 @@ USER airflow
 # Installer les providers et dépendances nécessaires pour Airflow
 RUN pip install --no-cache-dir \
     apache-airflow-providers-apache-spark==4.1.0 \
-    apache-airflow-providers-apache-hdfs==3.2.1 \
-    hdfs>=2.7.0
+    "hdfs==2.7.0" \
+    "requests>=2.7.0" \
+    && pip install --no-cache-dir apache-airflow-providers-apache-hdfs==3.2.1 --no-deps \
+    && wget https://repo1.maven.org/maven2/com/crealytics/spark-excel_2.12/3.2.2_0.18.5/spark-excel_2.12-3.2.2_0.18.5.jar -P $SPARK_HOME/jars/

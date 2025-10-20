@@ -15,11 +15,11 @@ def main():
     print("Session Spark pour la couche Gold initialisée.")
 
     # --- Logique à implémenter ---
-    # 1. Lire les données depuis hdfs://namenode:9000/silver/
+    # 1. Lire les données depuis hdfs://namenode:9000/user/airflow/silver/
     # 2. Créer les tables de dimensions (dim_patients, dim_dates, dim_lieux, etc.)
     # 3. Créer la table de faits (fact_consultations, fact_hospitalisations)
     # 4. Calculer les indicateurs (KPIs) et les agrégats
-    # 5. Écrire les tables de faits et de dimensions dans hdfs://namenode:9000/gold/
+    # 5. Écrire les tables de faits et de dimensions dans hdfs://namenode:9000/user/airflow/gold/
     #    (et potentiellement les enregistrer dans le Metastore Hive)
 
     print("Logique de la couche Gold à implémenter.")

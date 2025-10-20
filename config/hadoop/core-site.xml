@@ -9,4 +9,14 @@
         <name>dfs.client.use.datanode.hostname</name>
         <value>true</value>
     </property>
+    <property>
+        <name>hadoop.http.staticuser.user</name>
+        <value>root</value>
+    </property>
+    <property>
+        <name>dfs.permissions</name>
+        <value>false</value>
+    </property>
+<property><name>fs.defaultFS</name><value>hdfs://f87c919951b6:8020</value></property>
+<property><name>fs.defaultFS</name><value>hdfs://ba1483d29b38:8020</value></property>
 </configuration>

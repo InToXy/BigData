@@ -14,11 +14,11 @@ def main():
     print("Session Spark pour la couche Silver initialisée.")
 
     # --- Logique à implémenter ---
-    # 1. Lire les données Parquet depuis hdfs://namenode:9000/bronze/
+    # 1. Lire les données Parquet depuis hdfs://namenode:9000/user/airflow/bronze/
     # 2. Effectuer les jointures (patients, diagnostics, hospitalisations, etc.)
     # 3. Nettoyer les données (doublons, valeurs manquantes)
     # 4. Enrichir les données (calcul d'âge, normalisation de codes)
-    # 5. Écrire le résultat en format Parquet dans hdfs://namenode:9000/silver/
+    # 5. Écrire le résultat en format Parquet dans hdfs://namenode:9000/user/airflow/silver/
 
     print("Logique de la couche Silver à implémenter.")
 

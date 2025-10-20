@@ -24,7 +24,8 @@ with DAG(
             'spark.executor.cores': '2',
             'spark.python.version': '3',
             'spark.driver.extraJavaOptions': '--add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED',
-            'spark.executor.extraJavaOptions': '--add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED'
+            'spark.executor.extraJavaOptions': '--add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED',
+            'spark.jars.packages': 'com.crealytics:spark-excel_2.12:3.2.2_0.18.5'
         },
         application_args=['--source-path', '/data/source']
     )
