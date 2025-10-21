@@ -61,11 +61,22 @@ services:
     depends_on:
       - bigdata_postgres
     volumes:
-      - ./data/source/data2023_avec_deces.dump:/tmp/data2023_avec_deces.dump
+      - ./data/source/DATA2023:/tmp/data2023_avec_deces.dump
     networks:
       - bigdata_network
     command: >
-      bash -c "until pg_isready -h bigdata_postgres -p 5432 -U admin -d healthcare_data; do echo 'Waiting for PostgreSQL to be ready...'; sleep 2; done; echo 'PostgreSQL is ready. Importing data...'; PGPASSWORD=admin123 psql -h bigdata_postgres -p 5432 -U admin -d postgres -c \"SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = 'healthcare_data' AND pid <> pg_backend_pid();\" && PGPASSWORD=admin123 dropdb --if-exists -h bigdata_postgres -p 5432 -U admin healthcare_data && PGPASSWORD=admin123 createdb -h bigdata_postgres -p 5432 -U admin healthcare_data && PGPASSWORD=admin123 pg_restore --no-owner -h bigdata_postgres -p 5432 -U admin -d healthcare_data /tmp/data2023_avec_deces.dump; echo 'Data import complete.';"
+      bash -c "
+      until pg_isready -h bigdata_postgres -p 5432 -U admin -d healthcare_data; do 
+        echo 'Waiting for PostgreSQL to be ready...'; 
+        sleep 2; 
+      done; 
+      echo 'PostgreSQL is ready. Importing data...'; 
+      PGPASSWORD=admin123 psql -h bigdata_postgres -p 5432 -U admin -d postgres -c \"SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = 'healthcare_data' AND pid <> pg_backend_pid();\" &&
+      PGPASSWORD=admin123 psql -h bigdata_postgres -p 5432 -U admin -d postgres -c \"CREATE ROLE postgres WITH SUPERUSER LOGIN PASSWORD 'admin123';\" 2>/dev/null || true &&
+      PGPASSWORD=admin123 dropdb --if-exists -h bigdata_postgres -p 5432 -U admin healthcare_data &&
+      PGPASSWORD=admin123 createdb -h bigdata_postgres -p 5432 -U admin healthcare_data &&
+      PGPASSWORD=admin123 pg_restore -v -h bigdata_postgres -p 5432 -U admin -d healthcare_data /tmp/data2023_avec_deces.dump &&
+      echo 'Data import complete.'"
     restart: "no"
 
   # # ============================================================
