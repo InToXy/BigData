@@ -27,7 +27,7 @@ def get_spark_session():
         else:
             raise Exception("Dossier jars non trouvé")
         
-        # Configuration Spark ULTRA-OPTIMISÉE pour la performance
+        # Configuration Spark avec FORCE de S3A - APPROCHE DIFFÉRENTE
         spark_builder = SparkSession.builder \
             .appName("Bronze Ingestion Pipeline - MinIO") \
             .config("spark.jars", jars_path) \
@@ -42,40 +42,10 @@ def get_spark_session():
             .config("spark.hadoop.fs.s3a.connection.establish.timeout", "5000") \
             .config("spark.hadoop.fs.s3a.fast.upload", "true") \
             .config("spark.hadoop.fs.s3a.multipart.size", "104857600") \
-            \
             .config("spark.sql.adaptive.enabled", "true") \
             .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-            .config("spark.sql.adaptive.localShuffleReader.enabled", "true") \
-            .config("spark.sql.adaptive.skewJoin.enabled", "true") \
-            .config("spark.sql.adaptive.nonEmptyPartitionRatioForBroadcastJoin", "0.2") \
-            \
             .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
-            .config("spark.kryo.registrationRequired", "false") \
-            .config("spark.kryoserializer.buffer.max", "512m") \
-            \
-            .config("spark.memory.fraction", "0.8") \
-            .config("spark.memory.storageFraction", "0.3") \
-            .config("spark.speculation", "true") \
-            .config("spark.dynamicAllocation.enabled", "true") \
-            .config("spark.dynamicAllocation.shuffleTracking.enabled", "true") \
-            .config("spark.shuffle.service.enabled", "true") \
-            \
-            .config("spark.default.parallelism", "8") \
-            .config("spark.sql.shuffle.partitions", "8") \
-            .config("spark.sql.files.maxPartitionBytes", "134217728") \
-            .config("spark.sql.files.openCostInBytes", "134217728") \
-            \
-            .config("spark.executor.cores", "4") \
-            .config("spark.executor.memory", "4g") \
-            .config("spark.executor.memoryOverhead", "1g") \
-            .config("spark.driver.memory", "4g") \
-            .config("spark.driver.memoryOverhead", "1g") \
-            \
-            .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
-            .config("spark.sql.inMemoryColumnarStorage.compressed", "true") \
-            .config("spark.sql.inMemoryColumnarStorage.batchSize", "10000") \
-            .config("spark.sql.cache.serializer", "COLUMNAR") \
-            .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true")
+            .config("spark.sql.legacy.timeParserPolicy", "LEGACY")
 
         spark = spark_builder.getOrCreate()
         
@@ -157,25 +127,13 @@ def test_minio_connection(spark):
         return False
 
 def write_to_minio_direct(df, output_table_name):
-    """Écrit directement dans MinIO en forçant S3A avec gestion de l'encodage."""
+    """Écrit directement dans MinIO en forçant S3A."""
     bronze_path = f"s3a://bronze/{output_table_name}"
     
     try:
         print(f"   💾 Écriture directe dans MinIO...")
         
-        # Conversion explicite des colonnes string en UTF-8
-        for column in df.columns:
-            if str(df.schema[column].dataType) == 'StringType':
-                df = df.withColumn(
-                    column,
-                    when(col(column).isNotNull(), 
-                         regexp_replace(col(column), "[\u0000-\u0008\u000B-\u000C\u000E-\u001F]", ""))
-                    .otherwise(None)
-                )
-        
-        # Configuration Parquet optimisée (en bytes)
-        # 1MB = 1048576 bytes
-        # 10MB = 10485760 bytes
+        # Écriture avec options S3A explicites
         df.write \
             .mode("overwrite") \
             .option("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
@@ -183,11 +141,6 @@ def write_to_minio_direct(df, output_table_name):
             .option("fs.s3a.access.key", "minioadmin") \
             .option("fs.s3a.secret.key", "minioadmin123") \
             .option("fs.s3a.path.style.access", "true") \
-            .option("compression", "snappy") \
-            .option("parquet.enable.dictionary", "true") \
-            .option("parquet.page.size", "1048576") \
-            .option("parquet.block.size", "10485760") \
-            .option("maxRecordsPerFile", "1000000") \
             .parquet(bronze_path)
         
         final_count = df.count()
@@ -439,16 +392,7 @@ def process_source(spark, config):
                 .option("header", True) \
                 .option("inferSchema", True) \
                 .option("delimiter", config.get("delimiter", ",")) \
-                .option("encoding", "ISO-8859-1") \
-                .option("quote", "\"") \
-                .option("escape", "\"") \
-                .option("multiLine", True) \
-                .option("mode", "PERMISSIVE") \
-                .option("columnNameOfCorruptRecord", "_corrupt_record") \
-                .option("maxCharsPerColumn", "4096") \
-                .option("maxColumns", "20480") \
-                .option("recursiveFileLookup", "true") \
-                .option("pathGlobFilter", "*.csv")
+                .option("encoding", "UTF-8")
             
             if "decimal" in config:
                 reader = reader.option("decimal", config["decimal"])
@@ -459,15 +403,15 @@ def process_source(spark, config):
             print(f"   ⚠️ Lecture Excel désactivée")
             return
         elif source_type == "postgres":
-            print(f"   ⏳ Connexion à PostgreSQL (service Docker)...")
+            print(f"   ⏳ Connexion à PostgreSQL...")
             df = spark.read.format("jdbc") \
-                .option("url", "jdbc:postgresql://bigdata_postgres:5432/healthcare_data") \
-                .option("query", f"SELECT * FROM public.{source_path}") \
+                .option("url", f"jdbc:postgresql://bigdata_postgres:5432/healthcare_data") \
+                .option("dbtable", source_path) \
                 .option("user", "admin") \
                 .option("password", "admin123") \
                 .option("driver", "org.postgresql.Driver") \
                 .load()
-            print(f"   ✓ Données chargées depuis le service Docker PostgreSQL.")
+            print(f"   ✓ Données chargées depuis PostgreSQL")
         else:
             raise ValueError(f"Type de source non supporté : {source_type}")
 
@@ -592,181 +536,16 @@ if __name__ == "__main__":
         
         print("🎯 Test MinIO réussi! Début du traitement des données...")
         
-        # Configuration des sources avec clés optimisées pour les jointures
+        # Configuration des sources
         source_configs = [
-            # Tables PostgreSQL - Données médicales
-            {
-                "type": "postgres",
-                "source_name": "Patient",
-                "path": "Patient",
-                "output_table": "patients",
-                "pii_columns": ["Nom", "Prenom", "EMail", "Tel", "Num_Secu"],
-                "sk_columns": ["Id_patient"],
-                "description": "Table principale des patients"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Professionnel_de_sante",
-                "path": "Professionnel_de_sante",
-                "output_table": "professionnels_sante_pg",
-                "pii_columns": ["Nom", "Prenom"],
-                "sk_columns": ["Identifiant", "Code_specialite"],
-                "description": "Professionnels de santé"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Consultation",
-                "path": "Consultation",
-                "output_table": "consultations",
-                "pii_columns": [],
-                "sk_columns": ["Num_consultation", "Id_patient", "Id_prof_sante"],
-                "description": "Consultations médicales"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Medicaments",
-                "path": "Medicaments",
-                "output_table": "medicaments",
-                "pii_columns": [],
-                "sk_columns": ["Code_CIS"],
-                "description": "Référentiel des médicaments"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Prescription",
-                "path": "Prescription",
-                "output_table": "prescriptions",
-                "pii_columns": [],
-                "sk_columns": ["Num_consultation", "Code_CIS"],
-                "description": "Prescriptions médicales"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Diagnostic",
-                "path": "Diagnostic",
-                "output_table": "diagnostics",
-                "pii_columns": [],
-                "sk_columns": ["Code_diag"],
-                "description": "Référentiel des diagnostics"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Mutuelle",
-                "path": "Mutuelle",
-                "output_table": "mutuelles",
-                "pii_columns": [],
-                "sk_columns": ["Id_Mut"],
-                "description": "Référentiel des mutuelles"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Adher",
-                "path": "Adher",
-                "output_table": "adherents_mutuelle",
-                "pii_columns": [],
-                "sk_columns": ["Id_patient", "Id_mut"],
-                "description": "Liens patients-mutuelles"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Specialites",
-                "path": "Specialites",
-                "output_table": "specialites",
-                "pii_columns": [],
-                "sk_columns": ["Code_specialite"],
-                "description": "Référentiel des spécialités médicales"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Salle",
-                "path": "Salle",
-                "output_table": "salles",
-                "pii_columns": [],
-                "sk_columns": ["Id_salle", "Num_consultation"],
-                "description": "Gestion des salles de consultation"
-            },
-            # Tables principales CSV
-            {
-                "type": "csv",
-                "source_name": "etablissement_sante.csv",
-                "path": "file:///data/source/csv/etablissement_sante.csv",
-                "delimiter": ";",
-                "output_table": "etablissement_sante",
-                "pii_columns": ["email", "telephone", "telephone_2", "siret_site"],
-                "sk_columns": ["finess_site", "identifiant_organisation"],
-                "description": "Table maîtresse des établissements"
-            },
-            {
-                "type": "csv",
-                "source_name": "professionnel_sante.csv",
-                "path": "file:///data/source/csv/professionnel_sante.csv",
-                "delimiter": ";",
-                "output_table": "professionnel_sante",
-                "pii_columns": ["nom", "prenom"],
-                "sk_columns": ["identifiant"],
-                "description": "Référentiel des professionnels"
-            },
-            {
-                "type": "csv",
-                "source_name": "activite_professionnel_sante.csv",
-                "path": "file:///data/source/csv/activite_professionnel_sante.csv",
-                "delimiter": ";",
-                "output_table": "activite_professionnel_sante",
-                "pii_columns": ["identifiant"],
-                "sk_columns": ["identifiant", "identifiant_organisation"],
-                "description": "Lien entre professionnels et établissements"
-            },
-            {
-                "type": "postgres",
-                "source_name": "deces",
-                "path": "deces",
-                "output_table": "deces",
-                "pii_columns": ["nom", "prenom", "numero_acte_deces"],
-                "sk_columns": ["numero_acte_deces", "code_lieu_deces"],
-                "description": "Registre des décès depuis PostgreSQL"
-            },
-            {
-                "type": "csv",
-                "source_name": "Hospitalisations.csv",
-                "path": "file:///data/source/csv/Hospitalisations.csv",
-                "delimiter": ";",
-                "output_table": "hospitalisations",
-                "pii_columns": ["Id_patient"],
-                "sk_columns": ["Num_Hospitalisation", "identifiant_organisation"],
-                "description": "Données d'hospitalisation avec lien vers établissements"
-            },
+            {"type": "csv", "source_name": "activite_professionnel_sante.csv", "path": "file:///data/source/csv/activite_professionnel_sante.csv", "delimiter": ";", "output_table": "activite_professionnel_sante", "pii_columns": ["identifiant"], "sk_columns": ["identifiant", "identifiant_organisation"]},
+        {"type": "csv", "source_name": "etablissement_sante.csv", "path": "file:///data/source/csv/etablissement_sante.csv", "delimiter": ";", "output_table": "etablissement_sante", "pii_columns": ["email", "telephone", "telephone_2", "siret_site"], "sk_columns": ["finess_site"]},
+        {"type": "csv", "source_name": "professionnel_sante.csv", "path": "file:///data/source/csv/professionnel_sante.csv", "delimiter": ";", "output_table": "professionnel_sante", "pii_columns": ["nom", "prenom"], "sk_columns": ["identifiant"]},
         {"type": "csv", "source_name": "Hospitalisations.csv", "path": "file:///data/source/csv/Hospitalisations.csv", "delimiter": ";", "output_table": "hospitalisations", "pii_columns": ["id_patient"], "sk_columns": ["num_hospitalisation"]},
-                    # Tables de satisfaction 2013
-            {
-                "type": "csv",
-                "source_name": "DPA_SSR_recueil2014_donnee2013_table_es.csv",
-                "path": "file:///data/source/csv/DPA_SSR_recueil2014_donnee2013_table_es.csv",
-                "delimiter": ";",
-                "output_table": "satisfaction_2013_dpa_ssr_es",
-                "pii_columns": [],
-                "sk_columns": ["finess", "Sources"],
-                "description": "Satisfaction SSR 2013 - Établissements"
-            },
-            {
-                "type": "csv",
-                "source_name": "DPA_SSR_recueil2014_donnee2013_table_participant.csv",
-                "path": "file:///data/source/csv/DPA_SSR_recueil2014_donnee2013_table_participant.csv",
-                "delimiter": ";",
-                "output_table": "satisfaction_2013_dpa_ssr_participant",
-                "pii_columns": [],
-                "sk_columns": ["finess", "sources"],
-                "description": "Satisfaction SSR 2013 - Participants"
-            },
-            {
-                "type": "csv",
-                "source_name": "RCP_MCO_recueil2014_donnee2013_table_es.csv",
-                "path": "file:///data/source/csv/RCP_MCO_recueil2014_donnee2013_table_es.csv",
-                "delimiter": ";",
-                "output_table": "satisfaction_2013_rcp_mco_es",
-                "pii_columns": [],
-                "sk_columns": ["finess", "Sources"],
-                "description": "Satisfaction MCO 2013 - Établissements"
-            },
+        {"type": "csv", "source_name": "DPA_SSR_recueil2014_donnee2013_table_es.csv", "path": "file:///data/source/csv/DPA_SSR_recueil2014_donnee2013_table_es.csv", "delimiter": ";", "output_table": "satisfaction_2013_dpa_ssr_es", "pii_columns": [], "sk_columns": ["finess"]},
+        {"type": "csv", "source_name": "DPA_SSR_recueil2014_donnee2013_table_participant.csv", "path": "file:///data/source/csv/DPA_SSR_recueil2014_donnee2013_table_participant.csv", "delimiter": ";", "output_table": "satisfaction_2013_dpa_ssr_participant", "pii_columns": [], "sk_columns": ["finess"]},
+        {"type": "csv", "source_name": "DPA_SSR_recueil2014_donnee2013_table_lexique.csv", "path": "file:///data/source/csv/DPA_SSR_recueil2014_donnee2013_table_lexique.csv", "delimiter": ";", "output_table": "satisfaction_2013_dpa_ssr_lexique", "pii_columns": [], "sk_columns": ["NAME"]},
+        {"type": "csv", "source_name": "RCP_MCO_recueil2014_donnee2013_table_es.csv", "path": "file:///data/source/csv/RCP_MCO_recueil2014_donnee2013_table_es.csv", "delimiter": ";", "output_table": "satisfaction_2013_rcp_mco_es", "pii_columns": [], "sk_columns": ["finess"]},
         {"type": "csv", "source_name": "RCP_MCO_recueil2014_donnee2013_table_participant.csv", "path": "file:///data/source/csv/RCP_MCO_recueil2014_donnee2013_table_participant.csv", "delimiter": ";", "output_table": "satisfaction_2013_rcp_mco_participant", "pii_columns": [], "sk_columns": ["finess"]},
         {"type": "csv", "source_name": "hpp_mco_recueil2015_donnee2014_tables_es.csv", "path": "file:///data/source/csv/hpp_mco_recueil2015_donnee2014_tables_es.csv", "delimiter": ";", "output_table": "satisfaction_2014_hpp_mco_es", "pii_columns": [], "sk_columns": ["finess"]},
         {"type": "csv", "source_name": "idm_mco_recueil2015_donnee2014_tables_es.csv", "path": "file:///data/source/csv/idm_mco_recueil2015_donnee2014_tables_es.csv", "delimiter": ";", "output_table": "satisfaction_2014_idm_mco_es", "pii_columns": [], "sk_columns": ["finess"]},
