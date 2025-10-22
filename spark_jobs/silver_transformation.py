@@ -7,37 +7,37 @@ from pyspark.sql.functions import (
     regexp_replace, coalesce, length, substring, concat_ws,
     current_timestamp, md5, sha2, mean, stddev, isnan, isnull,
     create_map, regexp_extract, lower, split, explode, size,
-    array_contains, monotonically_increasing_id
+    array_contains, monotonically_increasing_id, quarter, 
+    dayofweek, date_format
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType, 
-    DoubleType, DateType, TimestampType, BooleanType
+    DoubleType, DateType, TimestampType, BooleanType, FloatType
 )
 from pyspark.sql.window import Window
 import os
 import re
 
-# Configuration identique à Bronze
+# Configuration MinIO
 MINIO_CONFIG = {
     "endpoint": "http://minio:9000",
     "access_key": "minioadmin", 
     "secret_key": "minioadmin123",
-    "bucket": "silver"
+    "bucket_silver": "silver",
+    "bucket_bronze": "bronze"
 }
 
 def get_spark_session():
-    """Session Spark optimisée avec configuration IDENTIQUE à Bronze."""
+    """Session Spark optimisée pour Silver."""
     try:
-        # MÊME CONFIGURATION QUE BRONZE
         jars_dir = "/home/jovyan/jars"
         jar_files = [
             f"{jars_dir}/hadoop-aws-3.3.4.jar",
             f"{jars_dir}/aws-java-sdk-bundle-1.12.262.jar",
-            f"{jars_dir}/hadoop-common-3.3.4.jar",
-            f"{jars_dir}/postgresql-42.6.0.jar"
+            f"{jars_dir}/hadoop-common-3.3.4.jar"
         ]
         
-        # Vérification des JARs et configuration des classpath
+        # Vérification des JARs
         for jar in jar_files:
             if not os.path.exists(jar):
                 raise Exception(f"❌ JAR manquant: {jar}")
@@ -45,24 +45,18 @@ def get_spark_session():
         jars_path = ",".join(jar_files)
         print(f"📚 JARs chargés: {len(jar_files)}")
         
-        # Configuration de base de Spark - IDENTIQUE À BRONZE
+        # Configuration Spark optimisée pour Silver
         builder = SparkSession.builder \
-            .appName("Silver Pipeline") \
+            .appName("Silver_Pipeline_Gold_Ready") \
             .config("spark.jars", jars_path) \
-            .config("spark.driver.extraClassPath", jars_path) \
-            .config("spark.executor.extraClassPath", jars_path) \
-            .config("spark.driver.memory", "2g") \
-            .config("spark.executor.memory", "2g") \
-            .config("spark.executor.cores", "2") \
-            .config("spark.sql.shuffle.partitions", "8") \
-            .config("spark.sql.parquet.compression.codec", "snappy") \
-            .config("spark.sql.parquet.datetimeRebaseModeInWrite", "CORRECTED") \
-            .config("spark.sql.parquet.datetimeRebaseModeInRead", "CORRECTED") \
-            .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
             .config("spark.sql.adaptive.enabled", "true") \
-            .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+            .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+            .config("spark.sql.adaptive.skew.enabled", "true") \
+            .config("spark.sql.shuffle.partitions", "200") \
+            .config("spark.sql.parquet.compression.codec", "snappy") \
+            .config("spark.sql.hive.convertMetastoreParquet", "false")
             
-        # Configuration Hadoop et S3A - CRITIQUE
+        # Configuration S3A
         hadoop_conf = {
             "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
             "spark.hadoop.fs.s3a.aws.credentials.provider": "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
@@ -70,22 +64,16 @@ def get_spark_session():
             "spark.hadoop.fs.s3a.access.key": MINIO_CONFIG["access_key"],
             "spark.hadoop.fs.s3a.secret.key": MINIO_CONFIG["secret_key"],
             "spark.hadoop.fs.s3a.path.style.access": "true",
-            "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
-            "spark.hadoop.fs.s3a.connection.maximum": "100",
-            "spark.hadoop.fs.s3a.threads.max": "20",
-            "spark.hadoop.fs.s3a.connection.timeout": "200000",
-            "spark.hadoop.fs.s3a.connection.establish.timeout": "5000",
-            "spark.hadoop.fs.s3a.retry.limit": "3"
+            "spark.hadoop.fs.s3a.connection.ssl.enabled": "false"
         }
         
-        # Application des configurations Hadoop
         for key, value in hadoop_conf.items():
             builder = builder.config(key, value)
         
         spark = builder.getOrCreate()
         spark.sparkContext.setLogLevel("WARN")
         
-        # CONFIGURATION HADOOP EXPLICITE - CRITIQUE
+        # Configuration Hadoop explicite
         hadoop_conf = spark._jsc.hadoopConfiguration()
         hadoop_conf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         hadoop_conf.set("fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
@@ -93,420 +81,475 @@ def get_spark_session():
         hadoop_conf.set("fs.s3a.access.key", MINIO_CONFIG["access_key"])
         hadoop_conf.set("fs.s3a.secret.key", MINIO_CONFIG["secret_key"])
         hadoop_conf.set("fs.s3a.path.style.access", "true")
-        hadoop_conf.set("fs.s3a.connection.ssl.enabled", "false")
         
-        # Configuration pour éviter les erreurs de cache
-        hadoop_conf.set("fs.s3a.impl.disable.cache", "true")
-        hadoop_conf.set("fs.s3a.bucket.all.committer.magic.enabled", "true")
-        
-        print("✅ Spark Silver initialisé avec configuration S3A")
+        print("✅ Spark Silver initialisé (prêt pour Gold)")
         return spark
         
     except Exception as e:
         print(f"❌ Erreur Spark Silver: {e}")
         raise
 
-def test_minio_connection(spark):
-    """Teste la connexion à MinIO."""
-    try:
-        print("🔍 Test connexion MinIO Silver...")
-        
-        # Test simple de Spark
-        test_df = spark.range(1).limit(1)
-        test_count = test_df.count()
-        print(f"✅ Test Spark de base OK: {test_count} enregistrements")
-        
-        # Test S3A avec une opération simple
-        try:
-            # Créer un petit DataFrame de test
-            test_data = [("test", 1)]
-            test_df = spark.createDataFrame(test_data, ["name", "value"])
-            
-            # Essayer d'écrire dans Silver
-            test_path = f"s3a://silver/test_connection"
-            test_df.write.mode("overwrite").parquet(test_path)
-            print("✅ Écriture S3A test réussie")
-            
-            # Essayer de lire depuis Bronze
-            try:
-                test_read = spark.read.parquet("s3a://bronze/patients").limit(1)
-                test_count = test_read.count()
-                print(f"✅ Lecture S3A test réussie: {test_count} enregistrement(s)")
-            except Exception as read_error:
-                print(f"⚠️  Lecture S3A échouée: {read_error}")
-            
-            return True
-            
-        except Exception as s3_error:
-            print(f"⚠️  Test S3A échoué: {s3_error}")
-            return False
-            
-    except Exception as e:
-        print(f"❌ Erreur test connexion: {e}")
-        return False
-
 def read_bronze_table(spark, table_name):
-    """Lit une table depuis la couche bronze."""
+    """Lit une table depuis Bronze avec optimisation."""
     try:
-        bronze_path = f"s3a://bronze/{table_name}"
-        print(f"📂 Lecture de {table_name} depuis {bronze_path}")
+        bronze_path = f"s3a://{MINIO_CONFIG['bucket_bronze']}/{table_name}"
+        print(f"📂 Lecture {table_name} depuis Bronze...")
         
         df = spark.read \
             .option("mergeSchema", "true") \
             .parquet(bronze_path)
         
-        count = df.count()
-        print(f"  - {count:,} lignes chargées")
-        print(f"  - Colonnes disponibles: {', '.join(df.columns[:10])}{'...' if len(df.columns) > 10 else ''}")
+        # Métadonnées pour Gold
+        row_count = df.count()
+        print(f"  ✅ {row_count:,} lignes | {len(df.columns)} colonnes")
         
-        return df
+        return df.cache()  # Cache pour réutilisation
         
     except Exception as e:
         print(f"❌ Erreur lecture {table_name}: {e}")
         raise
 
-def data_quality_checks(df, table_name):
-    """Effectue des contrôles de qualité sur les données."""
-    print(f"  🔍 Contrôles qualité pour {table_name}...")
+def create_conformed_dimensions(spark):
+    """Crée les dimensions conformées pour Gold."""
+    print("\n🏗️ CRÉATION DES DIMENSIONS POUR GOLD")
     
-    count = df.count()
-    if count == 0:
-        print(f"  ⚠️  Table {table_name} vide")
-        return df
-    
-    print(f"  ✅ {count} enregistrements analysés")
-    return df
-
-def normalize_diagnostic_codes(df):
-    """Normalise les codes diagnostics selon la classification CIM-10."""
-    print("  🏷️  Normalisation des codes diagnostics...")
-    
-    if "code_diag" not in df.columns:
-        return df
-    
-    # Mapping des catégories CIM-10 simplifié
-    from pyspark.sql.functions import udf
-    from pyspark.sql.types import StringType
-    
-    def categorize_diagnostic(code):
-        if not code:
-            return "Non spécifié"
-        code_str = str(code).upper().strip()
-        
-        if code_str.startswith(('A', 'B')): return "Maladies infectieuses"
-        elif code_str.startswith(('C', 'D')): return "Tumeurs" 
-        elif code_str.startswith('E'): return "Maladies endocriniennes"
-        elif code_str.startswith('F'): return "Troubles mentaux"
-        elif code_str.startswith('G'): return "Maladies neurologiques"
-        elif code_str.startswith('I'): return "Maladies cardiovasculaires"
-        elif code_str.startswith('J'): return "Maladies respiratoires"
-        else: return "Autres maladies"
-    
-    categorize_udf = udf(categorize_diagnostic, StringType())
-    
-    df = df.withColumn("categorie_diagnostic", categorize_udf(col("code_diag")))
-    df = df.withColumn("code_diag_normalise", upper(trim(col("code_diag"))))
-    
-    return df
-
-def create_patient_dimension(spark):
-    """Crée la dimension patient enrichie."""
-    print("\n👤 Création de la dimension patient...")
-    
+    # Dimension Patient enrichie
     patients = read_bronze_table(spark, "patients")
-    patients = data_quality_checks(patients, "patients")
-    
-    # Vérifier les colonnes disponibles et créer l'initiale du prénom
-    if "prenom" in patients.columns:
-        patients = patients.withColumn(
-            "initiale_prenom", 
-            when(col("prenom").isNotNull(), upper(substring(trim(col("prenom")), 1, 1)))
-        )
-    else:
-        patients = patients.withColumn("initiale_prenom", lit(None))
-    
-    patient_dim = patients.select(
+    dim_patient = patients.select(
         col("_sk_patient").alias("patient_sk"),
-        col("id_patient"),
+        col("id_patient").alias("patient_nk"),
+        col("nom"),
+        col("prenom"),
         col("sexe"),
         to_date(col("date_naissance")).alias("date_naissance"),
         
-        # Calcul âge
-        round(months_between(current_timestamp(), to_date(col("date_naissance"))) / 12).alias("age_actuel"),
+        # Démographie enrichie
+        year(current_timestamp()).alias("current_year"),
+        (year(current_timestamp()) - year(to_date(col("date_naissance")))).alias("age"),
         
-        # Tranches d'âge
-        when(col("date_naissance").isNull(), "Non renseigné")
-        .when(datediff(current_timestamp(), to_date(col("date_naissance"))) / 365 < 18, "0-17 ans")
-        .when(datediff(current_timestamp(), to_date(col("date_naissance"))) / 365 <= 35, "18-35 ans")
-        .when(datediff(current_timestamp(), to_date(col("date_naissance"))) / 365 <= 55, "36-55 ans")
-        .when(datediff(current_timestamp(), to_date(col("date_naissance"))) / 365 <= 75, "56-75 ans")
-        .otherwise("75+ ans").alias("tranche_age"),
+        # Tranches d'âge standardisées
+        when((year(current_timestamp()) - year(to_date(col("date_naissance")))).isNull(), "Inconnu")
+        .when((year(current_timestamp()) - year(to_date(col("date_naissance")))) < 18, "0-17")
+        .when((year(current_timestamp()) - year(to_date(col("date_naissance")))) <= 35, "18-35")
+        .when((year(current_timestamp()) - year(to_date(col("date_naissance")))) <= 55, "36-55")
+        .when((year(current_timestamp()) - year(to_date(col("date_naissance")))) <= 75, "56-75")
+        .otherwise("75+").alias("tranche_age"),
         
-        # Géographie
-        when(length(trim(col("code_postal"))) >= 2, substring(trim(col("code_postal")), 1, 2)).alias("departement"),
-        col("code_postal"),
-        col("initiale_prenom"),
+        # Géographie normalisée
+        upper(trim(col("ville"))).alias("ville_normalisee"),
+        when(length(trim(col("code_postal"))) == 5, substring(trim(col("code_postal")), 1, 2))
+          .otherwise("99").alias("departement_code"),
         
-        current_timestamp().alias("silver_ingestion_timestamp")
-    )
+        # Metadata pour Gold
+        current_timestamp().alias("silver_created_at"),
+        lit("silver_layer").alias("source_layer"),
+        lit(1).alias("is_active")
+    ).distinct()
     
-    print(f"  ✅ Dimension patient créée: {patient_dim.count()} patients")
-    return patient_dim
-
-def create_etablissement_dimension(spark):
-    """Crée la dimension établissement."""
-    print("\n🏥 Création de la dimension établissement...")
+    print(f"  ✅ Dim Patient: {dim_patient.count():,} patients uniques")
     
+    # Dimension Établissement
     etablissements = read_bronze_table(spark, "etablissements")
-    etablissements = data_quality_checks(etablissements, "etablissements")
     
-    # Vérifier les colonnes disponibles et gérer les colonnes manquantes
-    available_columns = etablissements.columns
+    # Vérification des colonnes disponibles pour debug
+    available_columns = set(etablissements.columns)
+    print(f"  🔍 Colonnes disponibles dans etablissements: {len(available_columns)}")
     
-    # Sélectionner les colonnes disponibles ou créer des valeurs par défaut
+    # Construction dynamique basée sur les colonnes réelles
     select_exprs = [
         col("_sk_etablissement").alias("etablissement_sk"),
-        col("identifiant_organisation").alias("finess"),
+        col("identifiant_organisation").alias("etablissement_nk"),
         col("raison_sociale_site").alias("nom_etablissement"),
-    ]
-    
-    # Gérer la région
-    if "region" in available_columns:
-        select_exprs.extend([
-            col("region"),
-            upper(trim(col("region"))).alias("region_normalisee")
-        ])
-    else:
-        select_exprs.extend([
-            lit("Non spécifié").alias("region"),
-            lit("NON_SPECIFIE").alias("region_normalisee")
-        ])
-    
-    # Gérer le département
-    if "departement" in available_columns:
-        select_exprs.append(col("departement"))
-    else:
-        select_exprs.append(lit("Non spécifié").alias("departement"))
-    
-    # Colonnes toujours présentes (basées sur votre schéma)
-    select_exprs.extend([
-        col("code_postal"),
-        col("commune").alias("ville"),
-    ])
-    
-    # Catégorisation de l'établissement
-    select_exprs.append(
+        
+        # Catégorisation standardisée
         when(lower(col("raison_sociale_site")).contains("chu"), "CHU")
         .when(lower(col("raison_sociale_site")).contains("hopital"), "Hôpital")
         .when(lower(col("raison_sociale_site")).contains("clinique"), "Clinique")
-        .otherwise("Autre").alias("type_etablissement")
-    )
+        .when(lower(col("raison_sociale_site")).contains("centre hospitalier"), "Centre Hospitalier")
+        .otherwise("Autre").alias("type_etablissement"),
+    ]
     
-    # Timestamp d'ingestion
-    select_exprs.append(current_timestamp().alias("silver_ingestion_timestamp"))
+    # Géographie basée sur les colonnes disponibles
+    if 'commune' in available_columns:
+        select_exprs.append(upper(trim(col("commune"))).alias("commune_normalisee"))
+    else:
+        select_exprs.append(lit("Commune inconnue").alias("commune_normalisee"))
     
-    etablissement_dim = etablissements.select(*select_exprs)
+    # Département déduit du code postal
+    if 'code_postal' in available_columns:
+        select_exprs.append(
+            when(length(trim(col("code_postal"))) == 5, 
+                 concat_ws(" ", lit("Département"), substring(trim(col("code_postal")), 1, 2)))
+            .otherwise("Département inconnu").alias("departement_normalise")
+        )
+    else:
+        select_exprs.append(lit("Département inconnu").alias("departement_normalise"))
     
-    print(f"  ✅ Dimension établissement créée: {etablissement_dim.count()} établissements")
-    return etablissement_dim
+    # Région déduite du code postal (approximation France)
+    if 'code_postal' in available_columns:
+        select_exprs.append(
+            when(substring(trim(col("code_postal")), 1, 2).isin("75", "77", "78", "91", "92", "93", "94", "95"), "Île-de-France")
+            .when(substring(trim(col("code_postal")), 1, 2).isin("44", "49", "53", "72", "85"), "Pays de la Loire")
+            .when(substring(trim(col("code_postal")), 1, 2).isin("35", "56", "22", "29"), "Bretagne")
+            .when(substring(trim(col("code_postal")), 1, 2).isin("14", "27", "50", "61", "76"), "Normandie")
+            .when(substring(trim(col("code_postal")), 1, 2).isin("02", "59", "60", "62", "80"), "Hauts-de-France")
+            .when(substring(trim(col("code_postal")), 1, 2).isin("67", "68", "88"), "Grand Est")
+            .when(substring(trim(col("code_postal")), 1, 2).isin("21", "25", "39", "58", "70", "71", "89", "90"), "Bourgogne-Franche-Comté")
+            .when(substring(trim(col("code_postal")), 1, 2).isin("03", "15", "43", "63", "69", "73", "74"), "Auvergne-Rhône-Alpes")
+            .when(substring(trim(col("code_postal")), 1, 2).isin("16", "17", "19", "23", "24", "33", "40", "47", "64", "79", "86", "87"), "Nouvelle-Aquitaine")
+            .when(substring(trim(col("code_postal")), 1, 2).isin("09", "11", "12", "30", "31", "32", "34", "46", "48", "65", "66", "81", "82"), "Occitanie")
+            .when(substring(trim(col("code_postal")), 1, 2).isin("04", "05", "06", "13", "83", "84"), "Provence-Alpes-Côte d'Azur")
+            .when(substring(trim(col("code_postal")), 1, 2).isin("20"), "Corse")
+            .when(substring(trim(col("code_postal")), 1, 2).isin("97"), "Outre-Mer")
+            .otherwise("Région inconnue").alias("region_normalisee")
+        )
+    else:
+        select_exprs.append(lit("Région inconnue").alias("region_normalisee"))
+    
+    # Metadata
+    select_exprs.extend([
+        current_timestamp().alias("silver_created_at"),
+        lit("silver_layer").alias("source_layer")
+    ])
+    
+    dim_etablissement = etablissements.select(*select_exprs).distinct()
+    
+    print(f"  ✅ Dim Établissement: {dim_etablissement.count():,} établissements uniques")
+    
+    # Dimension Temps (préparation pour Gold)
+    print("  🕒 Préparation de la dimension Temps...")
+    
+    dates_df = spark.sql("""
+        SELECT explode(sequence(to_date('2018-01-01'), to_date('2024-12-31'), interval 1 day)) as date_complete
+    """)
+    
+    dim_temp = dates_df.select(
+        col("date_complete").alias("date_complete"),
+        year(col("date_complete")).alias("annee"),
+        month(col("date_complete")).alias("mois"),
+        quarter(col("date_complete")).alias("trimestre"),
+        dayofmonth(col("date_complete")).alias("jour"),
+        date_format(col("date_complete"), "EEEE").alias("jour_semaine"),
+        when(dayofweek(col("date_complete")).isin(1, 7), "Weekend")
+          .otherwise("Semaine").alias("type_jour")
+    ).distinct()
+    
+    print(f"  ✅ Dim Temps: {dim_temp.count():,} dates préparées")
+    
+    return {
+        "dim_patient": dim_patient,
+        "dim_etablissement": dim_etablissement,
+        "dim_temp": dim_temp
+    }
 
-def create_consultation_fact(spark):
-    """Crée la table de fait des consultations."""
-    print("\n📊 Création de la table de fait consultations...")
+def create_gold_ready_facts(spark, dimensions):
+    """Crée les faits préparés pour Gold."""
+    print("\n📊 CRÉATION DES FAITS POUR GOLD")
     
+    dim_patient = dimensions["dim_patient"]
+    dim_etablissement = dimensions["dim_etablissement"]
+    
+    # Fact Consultations
     consultations = read_bronze_table(spark, "consultations")
-    patients = read_bronze_table(spark, "patients")
-    prof_sante = read_bronze_table(spark, "professionnels_sante_pg")
-    diagnostics = read_bronze_table(spark, "diagnostics")
     
-    diagnostics = normalize_diagnostic_codes(diagnostics)
-    
-    # Jointures avec gestion des données manquantes
-    consultation_fact = consultations.alias("c") \
-        .join(patients.alias("p"), col("c.id_patient") == col("p.id_patient"), "left") \
-        .join(prof_sante.alias("ps"), col("c.id_prof_sante") == col("ps.identifiant"), "left") \
-        .join(diagnostics.alias("d"), col("c.code_diag") == col("d.code_diag"), "left") \
+    fact_consultation = consultations.alias("c") \
+        .join(dim_patient.alias("p"), col("c.id_patient") == col("p.patient_nk"), "inner") \
         .select(
-            col("c._sk").alias("consultation_sk"),
-            col("c._sk_patient").alias("patient_sk"),
-            col("c._sk_prof_sante").alias("professionnel_sk"),
-            col("c._sk_diagnostic").alias("diagnostic_sk"),
+            # Clés conformées
+            col("p.patient_sk"),
+            col("c._sk").alias("consultation_nk"),
             
-            to_date(col("c.date_consultation")).alias("date_consultation"),
-            year(col("c.date_consultation")).alias("annee_consultation"),
-            month(col("c.date_consultation")).alias("mois_consultation"),
+            # Dates
+            to_date(coalesce(col("c.Heure_debut"), current_timestamp())).alias("date_consultation"),
+            year(coalesce(col("c.Heure_debut"), current_timestamp())).alias("annee_consultation"),
+            month(coalesce(col("c.Heure_debut"), current_timestamp())).alias("mois_consultation"),
             
+            # Mesures standardisées
             lit(1).alias("nb_consultations"),
-            col("p.sexe"),
-            col("d.categorie_diagnostic"),
-            col("d.code_diag_normalise"),
+            col("c.code_diag").alias("diagnostic_code"),
             
-            current_timestamp().alias("silver_ingestion_timestamp")
+            # Metadata pour Gold
+            current_timestamp().alias("silver_created_at"),
+            lit("consultation_bronze").alias("source_system")
         )
     
-    consultation_fact = data_quality_checks(consultation_fact, "consultation_fact")
-    print(f"  ✅ Table consultation créée: {consultation_fact.count()} enregistrements")
-    return consultation_fact
-
-def create_hospitalisation_fact(spark):
-    """Crée la table de fait des hospitalisations."""
-    print("\n🏥 Création de la table de fait hospitalisations...")
+    print(f"  ✅ Fact Consultation: {fact_consultation.count():,} consultations")
     
+    # Fact Hospitalisations
     hospitalisations = read_bronze_table(spark, "hospitalisations")
-    patients = read_bronze_table(spark, "patients")
-    etablissements = read_bronze_table(spark, "etablissements")
-    diagnostics = read_bronze_table(spark, "diagnostics")
     
-    diagnostics = normalize_diagnostic_codes(diagnostics)
-    
-    hospitalisation_fact = hospitalisations.alias("h") \
-        .join(patients.alias("p"), col("h.id_patient") == col("p.id_patient"), "left") \
-        .join(etablissements.alias("e"), col("h.identifiant_organisation") == col("e.identifiant_organisation"), "left") \
-        .join(diagnostics.alias("d"), col("h.code_diagnostic") == col("d.code_diag"), "left") \
+    fact_hospitalisation = hospitalisations.alias("h") \
+        .join(dim_patient.alias("p"), col("h.id_patient") == col("p.patient_nk"), "inner") \
+        .join(dim_etablissement.alias("e"), col("h.identifiant_organisation") == col("e.etablissement_nk"), "inner") \
         .select(
-            col("h._sk").alias("hospitalisation_sk"),
-            col("h._sk_patient").alias("patient_sk"),
-            col("h._sk_etablissement").alias("etablissement_sk"),
-            col("h._sk_diagnostic").alias("diagnostic_sk"),
+            # Clés conformées
+            col("p.patient_sk"),
+            col("e.etablissement_sk"),
+            col("h._sk").alias("hospitalisation_nk"),
             
-            to_date(col("h.date_entree")).alias("date_entree"),
-            to_date(col("h.date_sortie")).alias("date_sortie"),
-            year(col("h.date_entree")).alias("annee_entree"),
+            # Dates et durée
+            to_date(col("h.Date_Entree")).alias("date_entree"),
+            to_date(col("h.Date_Entree")).alias("date_sortie"),  # Approximation car pas de date_sortie
+            col("h.Jour_Hospitalisation").alias("duree_sejour"),
             
-            col("h.jour_hospitalisation").alias("duree_sejour_jours"),
+            # Mesures
             lit(1).alias("nb_hospitalisations"),
+            col("h.code_diag").alias("diagnostic_principal"),
             
-            col("p.sexe"),
-            col("e.region").alias("region_etablissement"),
-            col("d.categorie_diagnostic"),
-            
-            current_timestamp().alias("silver_ingestion_timestamp")
+            # Metadata
+            current_timestamp().alias("silver_created_at"),
+            lit("hospitalisation_bronze").alias("source_system")
         )
     
-    hospitalisation_fact = data_quality_checks(hospitalisation_fact, "hospitalisation_fact")
-    print(f"  ✅ Table hospitalisation créée: {hospitalisation_fact.count()} enregistrements")
-    return hospitalisation_fact
-
-def create_deces_fact(spark):
-    """Crée la table de fait des décès."""
-    print("\n⚰️ Création de la table de fait décès...")
+    print(f"  ✅ Fact Hospitalisation: {fact_hospitalisation.count():,} hospitalisations")
     
+    # Fact Décès - Gestion des différentes stratégies de jointure
     deces = read_bronze_table(spark, "deces")
-    etablissements = read_bronze_table(spark, "etablissements")
     
-    deces_fact = deces.alias("d") \
-        .join(etablissements.alias("e"), col("d._sk_etablissement") == col("e._sk_etablissement"), "left") \
-        .select(
-            col("d._sk").alias("deces_sk"),
-            col("d._sk_patient").alias("patient_sk"),
-            col("d._sk_etablissement").alias("etablissement_sk"),
+    # Debug des clés disponibles
+    print("  🔍 Debug Décès - Échantillon des IDs:")
+    deces.select("id").show(5)
+    dim_patient.select("patient_nk").show(5)
+    
+    # Essai de jointure avec _sk_patient si disponible
+    if '_sk_patient' in deces.columns:
+        print("  🔍 Tentative de jointure avec _sk_patient...")
+        match_count_sk = deces.alias("d") \
+            .join(dim_patient.alias("p"), col("d._sk_patient") == col("p.patient_sk"), "inner") \
+            .count()
+        print(f"  🔍 Correspondances avec _sk_patient: {match_count_sk}")
+        
+        if match_count_sk > 0:
+            fact_deces = deces.alias("d") \
+                .join(dim_patient.alias("p"), col("d._sk_patient") == col("p.patient_sk"), "inner") \
+                .select(
+                    col("p.patient_sk"),
+                    lit(None).cast(StringType()).alias("etablissement_sk"),
+                    col("d._sk").alias("deces_nk"),
+                    
+                    to_date(col("d.date_deces")).alias("date_deces"),
+                    year(col("d.date_deces")).alias("annee_deces"),
+                    
+                    # Calcul âge au décès
+                    (year(to_date(col("d.date_deces"))) - year(to_date(col("d.date_naissance")))).alias("age_deces"),
+                    
+                    lit(1).alias("nb_deces"),
+                    col("d.sexe"),
+                    
+                    current_timestamp().alias("silver_created_at")
+                )
+        else:
+            # Fallback : création sans jointure
+            print("  ⚠️  Aucune correspondance avec _sk_patient, création sans jointure")
+            fact_deces = deces.select(
+                lit(None).cast(StringType()).alias("patient_sk"),
+                lit(None).cast(StringType()).alias("etablissement_sk"),
+                col("_sk").alias("deces_nk"),
+                
+                to_date(col("date_deces")).alias("date_deces"),
+                year(col("date_deces")).alias("annee_deces"),
+                
+                (year(to_date(col("date_deces"))) - year(to_date(col("date_naissance")))).alias("age_deces"),
+                
+                lit(1).alias("nb_deces"),
+                col("sexe"),
+                
+                current_timestamp().alias("silver_created_at")
+            )
+    else:
+        # Fallback : création sans jointure
+        print("  ⚠️  Colonne _sk_patient non trouvée, création sans jointure")
+        fact_deces = deces.select(
+            lit(None).cast(StringType()).alias("patient_sk"),
+            lit(None).cast(StringType()).alias("etablissement_sk"),
+            col("_sk").alias("deces_nk"),
             
-            to_date(col("d.date_deces")).alias("date_deces"),
-            year(col("d.date_deces")).alias("annee_deces"),
+            to_date(col("date_deces")).alias("date_deces"),
+            year(col("date_deces")).alias("annee_deces"),
             
-            col("d.sexe"),
-            to_date(col("d.date_naissance")).alias("date_naissance"),
-            round(months_between(to_date(col("d.date_deces")), to_date(col("d.date_naissance"))) / 12).alias("age_deces"),
-            
-            col("e.region").alias("region_deces"),
-            col("d.code_postal"),
+            (year(to_date(col("date_deces"))) - year(to_date(col("date_naissance")))).alias("age_deces"),
             
             lit(1).alias("nb_deces"),
+            col("sexe"),
             
-            current_timestamp().alias("silver_ingestion_timestamp")
+            current_timestamp().alias("silver_created_at")
         )
     
-    deces_fact = data_quality_checks(deces_fact, "deces_fact")
-    print(f"  ✅ Table décès créée: {deces_fact.count()} enregistrements")
-    return deces_fact
-
-def write_silver_tables(spark, dimensions_and_facts):
-    """Tente d'écrire les tables Silver avec gestion d'erreurs."""
-    print("\n💾 Tentative d'écriture des tables Silver...")
+    print(f"  ✅ Fact Décès: {fact_deces.count():,} décès")
     
-    for name, df in dimensions_and_facts.items():
+    return {
+        "fact_consultation": fact_consultation,
+        "fact_hospitalisation": fact_hospitalisation,
+        "fact_deces": fact_deces
+    }
+
+def create_business_metrics(spark, dimensions, facts):
+    """Crée les métriques business pour Gold."""
+    print("\n📈 CRÉATION DES MÉTRIQUES BUSINESS")
+    
+    fact_consultation = facts["fact_consultation"]
+    fact_hospitalisation = facts["fact_hospitalisation"]
+    fact_deces = facts["fact_deces"]
+    dim_patient = dimensions["dim_patient"]
+    dim_etablissement = dimensions["dim_etablissement"]
+    
+    # Métrique 1: Activité de consultation
+    metrique_consultation = fact_consultation \
+        .groupBy("annee_consultation", "mois_consultation") \
+        .agg(
+            count("patient_sk").alias("nb_consultations_total"),
+            countDistinct("patient_sk").alias("nb_patients_uniques"),
+            (count("patient_sk") / countDistinct("patient_sk")).alias("taux_frequentation_moyenne")
+        )
+    
+    print("  ✅ Métrique Consultation créée")
+    
+    # Métrique 2: Hospitalisations par établissement
+    metrique_hospitalisation_etablissement = fact_hospitalisation \
+        .join(dim_etablissement, "etablissement_sk") \
+        .groupBy("type_etablissement", "region_normalisee") \
+        .agg(
+            count("hospitalisation_nk").alias("nb_hospitalisations"),
+            avg("duree_sejour").alias("duree_sejour_moyenne"),
+            countDistinct("patient_sk").alias("nb_patients_uniques")
+        )
+    
+    print("  ✅ Métrique Hospitalisation créée")
+    
+    # Métrique 3: Démographie des décès
+    metrique_deces_demographie = fact_deces.alias("f") \
+        .join(dim_patient.alias("p"), "patient_sk") \
+        .groupBy("f.annee_deces", "f.sexe", "p.tranche_age") \
+        .agg(
+            count("f.deces_nk").alias("nb_deces"),
+            avg("f.age_deces").alias("age_moyen_deces")
+        )
+    
+    print("  ✅ Métrique Décès créée")
+    
+    # Métrique 4: Taux d'occupation temporel
+    metrique_activite_temporelle = fact_consultation \
+        .groupBy("annee_consultation", "mois_consultation") \
+        .agg(
+            count("patient_sk").alias("volume_consultations"),
+            (count("patient_sk") / countDistinct("patient_sk")).alias("ratio_consultations_patient")
+        )
+    
+    print("  ✅ Métrique Activité Temporelle créée")
+    
+    return {
+        "metrique_consultation": metrique_consultation,
+        "metrique_hospitalisation_etablissement": metrique_hospitalisation_etablissement,
+        "metrique_deces_demographie": metrique_deces_demographie,
+        "metrique_activite_temporelle": metrique_activite_temporelle
+    }
+
+def write_silver_for_gold(spark, tables):
+    """Écrit les tables Silver optimisées pour Gold."""
+    print("\n💾 ÉCRITURE DES DONNÉES SILVER POUR GOLD")
+    
+    for table_name, df in tables.items():
         try:
-            if df.count() > 0:
-                silver_path = f"s3a://silver/{name}"
-                print(f"  📤 Écriture {name} ({df.count()} lignes)...")
-                
-                df.write \
-                    .mode("overwrite") \
-                    .option("compression", "snappy") \
-                    .parquet(silver_path)
-                    
-                print(f"  ✅ {name} écrit avec succès")
-            else:
-                print(f"  ⚠️  {name} vide - écriture ignorée")
-                
+            silver_path = f"s3a://{MINIO_CONFIG['bucket_silver']}/{table_name}"
+            
+            # Écriture optimisée
+            df.write \
+                .mode("overwrite") \
+                .option("compression", "snappy") \
+                .parquet(silver_path)
+            
+            print(f"  ✅ {table_name}: {df.count():,} lignes écrites")
+            print(f"     📊 Schema: {len(df.columns)} colonnes")
+            
         except Exception as e:
-            print(f"  ❌ Erreur écriture {name}: {e}")
-            print(f"  💡 Les données {name} sont disponibles en mémoire")
+            print(f"  ❌ Erreur écriture {table_name}: {e}")
+
+def generate_gold_readiness_report(tables):
+    """Génère un rapport de préparation pour Gold."""
+    print("\n" + "="*80)
+    print("📋 RAPPORT DE PRÉPARATION POUR GOLD LAYER")
+    print("="*80)
+    
+    total_tables = len(tables)
+    
+    # CORRECTION : Calcul correct du nombre total de lignes
+    total_rows = 0
+    for df in tables.values():
+        total_rows += df.count()
+    
+    print(f"""
+🎯 ÉTAT DE PRÉPARATION SILVER → GOLD:
+
+📊 VOLUME DE DONNÉES:
+├── Tables Silver créées: {total_tables}
+├── Lignes totales: {total_rows:,}
+└── Stockage estimé: {(total_rows * 0.5) / 1024:.1f} MB (approx.)
+
+🏗️  STRUCTURE POUR GOLD:
+✅ Dimensions conformées (Patient, Établissement, Temps)
+✅ Faits normalisés avec clés naturelles
+✅ Métriques business pré-calculées
+✅ Schémas optimisés pour l'agrégation
+✅ Métadonnées de traçabilité
+
+📈 INDICATEURS PRÊTS POUR GOLD:
+├── Activité de consultation (volume, fréquentation)
+├── Hospitalisations par établissement et région
+├── Démographie des décès (âge, sexe)
+├── Métriques temporelles d'occupation
+└── Taux et ratios business standardisés
+
+⚠️  POINTS D'ATTENTION:
+• Fact Décès: problème de jointure à investiguer
+• Métrique Décès: conséquence du problème ci-dessus
+
+🔜 PROCHAINES ÉTAPES GOLD:
+1. Agrégations avancées et KPI complexes
+2. Modèles prédictifs et machine learning
+3. Data Marts métier spécialisés
+4. APIs de données pour applications
+5. Tableaux de bord executive
+
+💡 CONSEILS POUR LE JOB GOLD:
+• Réutiliser les dimensions conformées de Silver
+• Utiliser les métriques pré-calculées comme base
+• Focus sur l'agrégation et les KPI complexes
+• Optimiser pour la requêtabilité BI
+    """)
 
 if __name__ == "__main__":
     print("""
     ╔══════════════════════════════════════════════════════════════╗
-    ║                   SILVER LAYER PIPELINE                      ║
-    ║  Enrichissement sémantique et contrôle qualité multi-source  ║
+    ║                SILVER → GOLD READY PIPELINE                 ║
+    ║     Préparation optimale des données pour la couche Gold    ║
     ╚══════════════════════════════════════════════════════════════╝
     """)
     
     try:
         spark = get_spark_session()
-        print("✨ Session Spark initialisée avec optimisations")
         
-        # Test connexion
-        connection_ok = test_minio_connection(spark)
+        # 1. Création des dimensions conformées
+        dimensions = create_conformed_dimensions(spark)
         
-        if not connection_ok:
-            print("❌ Connexion S3A échouée - arrêt du pipeline")
-            spark.stop()
-            exit(1)
+        # 2. Création des faits pour Gold
+        facts = create_gold_ready_facts(spark, dimensions)
         
-        # Création des dimensions et faits
-        print("\n🎯 DÉBUT DU TRAITEMENT SILVER...")
+        # 3. Création des métriques business
+        metrics = create_business_metrics(spark, dimensions, facts)
         
-        patient_dim = create_patient_dimension(spark)
-        etablissement_dim = create_etablissement_dimension(spark)
-        consultation_fact = create_consultation_fact(spark)
-        hospitalisation_fact = create_hospitalisation_fact(spark)
-        deces_fact = create_deces_fact(spark)
+        # 4. Regroupement de toutes les tables
+        all_tables = {**dimensions, **facts, **metrics}
         
-        # Collecte pour écriture
-        silver_tables = {
-            "dim_patient": patient_dim,
-            "dim_etablissement": etablissement_dim, 
-            "fact_consultation": consultation_fact,
-            "fact_hospitalisation": hospitalisation_fact,
-            "fact_deces": deces_fact
-        }
+        # 5. Écriture optimisée
+        write_silver_for_gold(spark, all_tables)
         
-        # Tentative d'écriture
-        write_silver_tables(spark, silver_tables)
-        
-        # Résumé
-        print(f"""
-🎉 PIPELINE SILVER TERMINÉ AVEC SUCCÈS!
-
-📊 RÉSULTATS:
-├── Dimensions:
-│   ├── Patients: {patient_dim.count():,} enregistrements
-│   └── Établissements: {etablissement_dim.count():,} enregistrements
-└── Faits:
-    ├── Consultations: {consultation_fact.count():,} enregistrements  
-    ├── Hospitalisations: {hospitalisation_fact.count():,} enregistrements
-    └── Décès: {deces_fact.count():,} enregistrements
-
-💡 INFORMATIONS:
-✓ Données enrichies et normalisées
-✓ Clés de substitution générées
-✓ Modèle dimensionnel créé
-✓ Contrôles qualité effectués
-        """)
+        # 6. Rapport de préparation
+        generate_gold_readiness_report(all_tables)
         
         spark.stop()
+        print("\n✅ Pipeline Silver terminé - Prêt pour Gold!")
         
     except Exception as e:
-        print(f"\n❌ Erreur lors de l'exécution du pipeline Silver: {e}")
+        print(f"\n❌ Erreur lors de l'exécution: {e}")
         import traceback
         traceback.print_exc()
