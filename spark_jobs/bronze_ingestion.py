@@ -1,813 +1,782 @@
 import os
 import sys
 import uuid as uuid_lib
-from datetime import datetime
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     sha2, col, current_timestamp, lit, concat_ws, 
     trim, upper, lower, regexp_replace, when, 
-    coalesce, monotonically_increasing_id, row_number,
-    length, count as count_agg, md5, udf, to_date, to_timestamp
+    coalesce, udf, to_date, year, month,
+    datediff, floor, substring, length, md5
 )
-from pyspark.sql.types import StringType, IntegerType, DoubleType, DateType, TimestampType
-from pyspark.sql.window import Window
+from pyspark.sql.types import StringType, DateType, TimestampType
 import re
 
-def get_spark_session():
-    """Initialise et retourne une session Spark configurée pour MinIO avec les JARs locaux."""
-    try:
-        # Lister les JARs disponibles localement
-        jars_dir = "/home/jovyan/jars"
-        if os.path.exists(jars_dir):
-            jar_files = [f for f in os.listdir(jars_dir) if f.endswith('.jar')]
-            jars_path = ",".join([f"{jars_dir}/{jar}" for jar in jar_files])
-            print(f"📦 JARs trouvés: {len(jar_files)} fichiers")
-            for jar in jar_files:
-                print(f"   - {jar}")
-        else:
-            raise Exception("Dossier jars non trouvé")
-        
-        # Configuration Spark ULTRA-OPTIMISÉE pour la performance
-        spark_builder = SparkSession.builder \
-            .appName("Bronze Ingestion Pipeline - MinIO") \
-            .config("spark.jars", jars_path) \
-            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
-            .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
-            .config("spark.hadoop.fs.s3a.access.key", "minioadmin") \
-            .config("spark.hadoop.fs.s3a.secret.key", "minioadmin123") \
-            .config("spark.hadoop.fs.s3a.path.style.access", "true") \
-            .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false") \
-            .config("spark.hadoop.fs.s3a.connection.timeout", "100000") \
-            .config("spark.hadoop.fs.s3a.attempts.maximum", "5") \
-            .config("spark.hadoop.fs.s3a.connection.establish.timeout", "5000") \
-            .config("spark.hadoop.fs.s3a.fast.upload", "true") \
-            .config("spark.hadoop.fs.s3a.multipart.size", "104857600") \
-            \
-            .config("spark.sql.adaptive.enabled", "true") \
-            .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-            .config("spark.sql.adaptive.localShuffleReader.enabled", "true") \
-            .config("spark.sql.adaptive.skewJoin.enabled", "true") \
-            .config("spark.sql.adaptive.nonEmptyPartitionRatioForBroadcastJoin", "0.2") \
-            \
-            .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
-            .config("spark.kryo.registrationRequired", "false") \
-            .config("spark.kryoserializer.buffer.max", "512m") \
-            \
-            .config("spark.memory.fraction", "0.8") \
-            .config("spark.memory.storageFraction", "0.3") \
-            .config("spark.speculation", "true") \
-            .config("spark.dynamicAllocation.enabled", "true") \
-            .config("spark.dynamicAllocation.shuffleTracking.enabled", "true") \
-            .config("spark.shuffle.service.enabled", "true") \
-            \
-            .config("spark.default.parallelism", "8") \
-            .config("spark.sql.shuffle.partitions", "8") \
-            .config("spark.sql.files.maxPartitionBytes", "134217728") \
-            .config("spark.sql.files.openCostInBytes", "134217728") \
-            \
-            .config("spark.executor.cores", "4") \
-            .config("spark.executor.memory", "4g") \
-            .config("spark.executor.memoryOverhead", "1g") \
-            .config("spark.driver.memory", "4g") \
-            .config("spark.driver.memoryOverhead", "1g") \
-            \
-            .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
-            .config("spark.sql.inMemoryColumnarStorage.compressed", "true") \
-            .config("spark.sql.inMemoryColumnarStorage.batchSize", "10000") \
-            .config("spark.sql.cache.serializer", "COLUMNAR") \
-            .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true")
+# Configuration centralisée
+MINIO_CONFIG = {
+    "endpoint": os.getenv("MINIO_ENDPOINT", "http://minio:9000"),
+    "access_key": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+    "secret_key": os.getenv("MINIO_SECRET_KEY", "minioadmin123"),
+    "bucket": "bronze"
+}
 
-        spark = spark_builder.getOrCreate()
+POSTGRES_CONFIG = {
+    "host": os.getenv("POSTGRES_HOST", "bigdata_postgres"),
+    "port": os.getenv("POSTGRES_PORT", "5432"),
+    "database": os.getenv("POSTGRES_DB", "healthcare_data"),
+    "user": os.getenv("POSTGRES_USER", "admin"),
+    "password": os.getenv("POSTGRES_PASSWORD", "admin123")
+}
+
+POSTGRES_JDBC_URL = f"jdbc:postgresql://{POSTGRES_CONFIG['host']}:{POSTGRES_CONFIG['port']}/{POSTGRES_CONFIG['database']}"
+
+# CONFIGURATION POUR MACHINES LIMITÉES (WSL)
+LOW_RESOURCE_MODE = True
+
+def get_spark_session():
+    """Session Spark optimisée avec configuration pour les dates."""
+    try:
+        jars_dir = "/home/jovyan/jars"
+        jar_files = [f for f in os.listdir(jars_dir) if f.endswith('.jar')]
+        jars_path = ",".join([f"{jars_dir}/{jar}" for jar in jar_files])
         
-        # Configuration Hadoop pour MinIO - APPROCHE AGGRESSIVE
+        builder = SparkSession.builder \
+            .appName("Bronze Pipeline") \
+            .config("spark.jars", jars_path) \
+            .config("spark.sql.parquet.datetimeRebaseModeInWrite", "CORRECTED") \
+            .config("spark.sql.parquet.datetimeRebaseModeInRead", "CORRECTED") \
+            .config("spark.sql.legacy.timeParserPolicy", "LEGACY")  # Pour formats dates M/d/yyyy
+        
+        if LOW_RESOURCE_MODE:
+            builder = builder \
+                .config("spark.driver.memory", "2g") \
+                .config("spark.executor.memory", "2g") \
+                .config("spark.executor.cores", "2") \
+                .config("spark.sql.shuffle.partitions", "8")
+        else:
+            builder = builder \
+                .config("spark.driver.memory", "6g") \
+                .config("spark.executor.memory", "8g") \
+                .config("spark.executor.cores", "4") \
+                .config("spark.sql.shuffle.partitions", "32")
+        
+        # Configuration S3A
+        builder = builder \
+            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+            .config("spark.hadoop.fs.s3a.endpoint", MINIO_CONFIG["endpoint"]) \
+            .config("spark.hadoop.fs.s3a.access.key", MINIO_CONFIG["access_key"]) \
+            .config("spark.hadoop.fs.s3a.secret.key", MINIO_CONFIG["secret_key"]) \
+            .config("spark.hadoop.fs.s3a.path.style.access", "true") \
+            .config("spark.sql.adaptive.enabled", "true") \
+            .config("spark.sql.parquet.compression.codec", "snappy")
+        
+        spark = builder.getOrCreate()
+        spark.sparkContext.setLogLevel("WARN")
+        
         hadoop_conf = spark._jsc.hadoopConfiguration()
-        
-        # FORCER l'implémentation S3A de manière agressive
         hadoop_conf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        hadoop_conf.set("fs.s3a.endpoint", "http://minio:9000")
-        hadoop_conf.set("fs.s3a.access.key", "minioadmin")
-        hadoop_conf.set("fs.s3a.secret.key", "minioadmin123")
+        hadoop_conf.set("fs.s3a.endpoint", MINIO_CONFIG["endpoint"])
+        hadoop_conf.set("fs.s3a.access.key", MINIO_CONFIG["access_key"])
+        hadoop_conf.set("fs.s3a.secret.key", MINIO_CONFIG["secret_key"])
         hadoop_conf.set("fs.s3a.path.style.access", "true")
-        hadoop_conf.set("fs.s3a.connection.ssl.enabled", "false")
-        hadoop_conf.set("fs.s3a.connection.timeout", "100000")
-        hadoop_conf.set("fs.s3a.attempts.maximum", "5")
-        hadoop_conf.set("fs.s3a.connection.establish.timeout", "5000")
-        hadoop_conf.set("fs.s3a.fast.upload", "true")
-        hadoop_conf.set("fs.s3a.multipart.size", "104857600")
         
-        # FORCER le schéma S3A pour éviter le fallback vers file://
-        hadoop_conf.set("fs.s3a.impl.disable.cache", "false")
-        
-        print("✅ Session Spark initialisée avec succès avec configuration MinIO")
-        
+        print("✅ Spark initialisé")
         return spark
         
     except Exception as e:
-        print(f"❌ Erreur lors de l'initialisation de Spark avec MinIO: {e}")
+        print(f"❌ Erreur Spark: {e}")
         raise
 
-def test_minio_connection(spark):
-    """Teste la connexion à MinIO avec approche différente."""
+def test_connections(spark):
+    """Test rapide des connexions."""
     try:
-        print("🔍 Test de connexion à MinIO (approche directe)...")
+        print("🔍 Test MinIO...")
+        test_df = spark.createDataFrame([(1, "test")], ["id", "data"])
+        test_path = f"s3a://{MINIO_CONFIG['bucket']}/test/data"
+        test_df.write.mode("overwrite").parquet(test_path)
+        print("✅ MinIO OK")
         
-        # Utiliser directement l'API Hadoop pour tester
-        conf = spark._jsc.hadoopConfiguration()
-        
-        # Créer un système de fichiers S3A explicitement
-        s3a_uri = spark._jvm.java.net.URI.create("s3a://bronze/")
-        fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(s3a_uri, conf)
-        
-        # Tester en créant un dossier test
-        test_dir = spark._jvm.org.apache.hadoop.fs.Path("s3a://bronze/test_spark")
-        
-        if not fs.exists(test_dir):
-            fs.mkdirs(test_dir)
-            print("✅ Dossier test créé dans MinIO")
-        
-        # Tester l'écriture avec Spark directement
-        test_df = spark.createDataFrame([(1, "test"), (2, "minio")], ["id", "data"])
-        test_path = "s3a://bronze/test_spark/data"
-        
-        # Écrire avec des options explicites
-        test_df.write \
-            .mode("overwrite") \
-            .option("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
-            .parquet(test_path)
-        
-        print("✅ Écriture test réussie dans MinIO")
-        
-        # Lire pour vérifier
-        test_read_df = spark.read \
-            .option("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
-            .parquet(test_path)
-        
-        count = test_read_df.count()
-        print(f"✅ Lecture test réussie - {count} lignes")
-        
-        # Nettoyer
-        if fs.exists(test_dir):
-            fs.delete(test_dir, True)
-            print("✅ Données test nettoyées")
-        
+        print("🔍 Test PostgreSQL...")
+        spark.read.format("jdbc") \
+            .option("url", POSTGRES_JDBC_URL) \
+            .option("dbtable", "(SELECT 1) as t") \
+            .option("user", POSTGRES_CONFIG["user"]) \
+            .option("password", POSTGRES_CONFIG["password"]) \
+            .option("driver", "org.postgresql.Driver") \
+            .load().count()
+        print("✅ PostgreSQL OK")
         return True
-            
     except Exception as e:
-        print(f"❌ Test MinIO échoué: {e}")
+        print(f"❌ Test échoué: {e}")
         return False
 
-def write_to_minio_direct(df, output_table_name):
-    """Écrit directement dans MinIO en forçant S3A avec gestion de l'encodage."""
-    bronze_path = f"s3a://bronze/{output_table_name}"
+def read_postgres_table_safe(spark, table_name, config):
+    """Lit une table PostgreSQL de manière sécurisée."""
+    table_clean = table_name.replace('"', '')
     
-    try:
-        print(f"   💾 Écriture directe dans MinIO...")
-        
-        # Conversion explicite des colonnes string en UTF-8
-        for column in df.columns:
-            if str(df.schema[column].dataType) == 'StringType':
-                df = df.withColumn(
-                    column,
-                    when(col(column).isNotNull(), 
-                         regexp_replace(col(column), "[\u0000-\u0008\u000B-\u000C\u000E-\u001F]", ""))
-                    .otherwise(None)
-                )
-        
-        # Configuration Parquet optimisée (en bytes)
-        # 1MB = 1048576 bytes
-        # 10MB = 10485760 bytes
-        df.write \
-            .mode("overwrite") \
-            .option("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
-            .option("fs.s3a.endpoint", "http://minio:9000") \
-            .option("fs.s3a.access.key", "minioadmin") \
-            .option("fs.s3a.secret.key", "minioadmin123") \
-            .option("fs.s3a.path.style.access", "true") \
-            .option("compression", "snappy") \
-            .option("parquet.enable.dictionary", "true") \
-            .option("parquet.page.size", "1048576") \
-            .option("parquet.block.size", "10485760") \
-            .option("maxRecordsPerFile", "1000000") \
-            .parquet(bronze_path)
-        
-        final_count = df.count()
-        print(f"   ✅ {final_count} lignes écrites dans MinIO: {bronze_path}")
-        return True, final_count
-        
-    except Exception as e:
-        print(f"   ❌ Échec écriture MinIO: {e}")
-        raise
+    # FILTRAGE SPÉCIAL POUR DECES: uniquement 2019
+    if "deces" in table_name.lower():
+        base_queries = [
+            f"(SELECT * FROM {table_name} WHERE EXTRACT(YEAR FROM date_deces) = 2019) as filtered",
+            f"(SELECT * FROM {table_clean} WHERE EXTRACT(YEAR FROM date_deces) = 2019) as filtered"
+        ]
+    else:
+        base_queries = [
+            f"(SELECT * FROM {table_name}) as data",
+            f"(SELECT * FROM {table_clean}) as data"
+        ]
+    
+    for query in base_queries:
+        try:
+            jdbc_options = {
+                "url": POSTGRES_JDBC_URL,
+                "dbtable": query,
+                "user": POSTGRES_CONFIG["user"],
+                "password": POSTGRES_CONFIG["password"],
+                "driver": "org.postgresql.Driver",
+                "fetchsize": "10000"
+            }
+            
+            df = spark.read.format("jdbc").options(**jdbc_options).load()
+            print(f"✅ Lecture {table_name}: {df.count()} lignes")
+            return df
+            
+        except Exception as e:
+            continue
+    
+    raise Exception(f"Impossible de lire la table {table_name}")
 
 def clean_col_names(df):
-    """Nettoie et standardise les noms de colonnes d'un DataFrame."""
-    def clean_name(name):
-        name = name.lower()
-        name = re.sub(r'[^a-z0-9]', '_', name)
-        name = re.sub(r'_+', '_', name)
-        name = name.strip('_')
-        return name
-
-    new_cols = [clean_name(c) for c in df.columns]
-    return df.toDF(*new_cols)
-
-def remove_duplicates(df, sk_columns):
-    """Supprime les doublons en se basant sur les colonnes clés."""
-    if not sk_columns or not all(c in df.columns for c in sk_columns):
-        print(f"⚠️ Avertissement : Colonnes SK {sk_columns} non disponibles, dédoublonnage sur toutes les colonnes")
-        return df.dropDuplicates()
-    
-    window_spec = Window.partitionBy(*sk_columns).orderBy(col("_ingestion_date").desc())
-    df_with_row_num = df.withColumn("_row_num", row_number().over(window_spec))
-    df_deduplicated = df_with_row_num.filter(col("_row_num") == 1).drop("_row_num")
-    
-    return df_deduplicated
-
-def clean_data(df):
-    """Nettoie les données."""
-    for column in df.columns:
-        if column.startswith("_"):
-            continue
-            
-        col_type = df.schema[column].dataType
-        
-        if isinstance(col_type, StringType):
-            df = df.withColumn(
-                column,
-                when(
-                    (trim(col(column)) == "") | 
-                    (trim(col(column)).isNull()) |
-                    (upper(trim(col(column))).isin("NULL", "NA", "N/A", "NONE", "UNKNOWN", "-")),
-                    lit(None)
-                ).otherwise(trim(col(column)))
-            )
-    
-    return df
-
-def remove_empty_rows(df, threshold=0.5):
-    """Supprime les lignes avec trop de valeurs nulles."""
-    total_cols = len([c for c in df.columns if not c.startswith("_")])
-    min_non_null = int(total_cols * threshold)
-    
-    if total_cols == 0:
-        return df
-    
-    non_null_expr = lit(0)
-    for column in [c for c in df.columns if not c.startswith("_")]:
-        non_null_expr = non_null_expr + when(col(column).isNotNull(), 1).otherwise(0)
-    
-    df = df.withColumn("_non_null_count", non_null_expr)
-    df = df.filter(col("_non_null_count") >= min_non_null)
-    df = df.drop("_non_null_count")
-    
-    return df
+    """Nettoie les noms de colonnes."""
+    return df.toDF(*[re.sub(r'[^a-zA-Z0-9]', '_', c).strip('_') for c in df.columns])
 
 def normalize_dates(df):
-    """
-    Normalise les colonnes de dates en détectant automatiquement 
-    les colonnes contenant 'date' et en appliquant plusieurs formats.
-    """
-    date_formats = [
-        "yyyy-MM-dd",      # ISO 8601: 2024-01-15
-        "dd/MM/yyyy",      # Format français: 15/01/2024
-        "MM/dd/yyyy",      # Format US: 01/15/2024
-        "yyyy/MM/dd",      # Format alternatif: 2024/01/15
-        "dd-MM-yyyy",      # Format avec tirets: 15-01-2024
-        "yyyyMMdd"         # Format compact: 20240115
-    ]
-    
-    date_columns_normalized = []
+    """Normalise les colonnes de dates avec support des formats variés."""
+    date_columns = []
     
     for column in df.columns:
-        if column.startswith("_"):
-            continue
-        
         col_lower = column.lower()
-        col_type = df.schema[column].dataType
-        
-        # Détecter les colonnes de dates
-        if ("date" in col_lower or 
-            col_lower.endswith("_dt") or 
-            col_lower.startswith("dt_") or
-            "naissance" in col_lower or
-            "deces" in col_lower or
-            "admission" in col_lower or
-            "sortie" in col_lower):
-            
-            # Si c'est déjà un DateType, on le garde
-            if isinstance(col_type, DateType):
-                continue
-            
-            # Sinon, on tente la conversion avec plusieurs formats
-            new_col_name = f"{column}_normalized"
-            temp_col = col(column)
-            
-            # Essayer chaque format de date
-            for date_format in date_formats:
-                temp_col = coalesce(
-                    temp_col,
-                    to_date(col(column), date_format)
-                )
-            
-            df = df.withColumn(new_col_name, temp_col)
-            date_columns_normalized.append((column, new_col_name))
+        if any(keyword in col_lower for keyword in ["date", "naissance", "deces", "entree", "sortie", "consultation", "admission"]):
+            date_columns.append(column)
     
-    if date_columns_normalized:
-        print(f"  📅 {len(date_columns_normalized)} colonnes de dates normalisées:")
-        for orig, norm in date_columns_normalized:
-            print(f"     - {orig} → {norm}")
+    for column in date_columns:
+        if not isinstance(df.schema[column].dataType, DateType):
+            df = df.withColumn(
+                column,
+                coalesce(
+                    to_date(col(column), "yyyy-MM-dd"),
+                    to_date(col(column), "dd/MM/yyyy"),
+                    to_date(col(column), "MM/dd/yyyy"),
+                    to_date(col(column), "M/d/yyyy"),
+                    to_date(col(column), "yyyy/MM/dd"),
+                    to_date(col(column), "dd-MM-yyyy"),
+                    to_date(col(column), "MM-dd-yyyy"),
+                    to_date(col(column), "M-d-yyyy")
+                )
+            )
     
     return df
 
-def normalize_data(df):
-    """Normalise les données selon le type."""
+def normalize_data(df, config):
+    """Normalise les données avec préservation dimensions analytiques."""
+    # Standardisation des noms de colonnes
+    column_mappings = {
+        "id_patient": ["Id_patient"],
+        "nom": ["Nom"],
+        "prenom": ["Prenom"], 
+        "sexe": ["Sexe", "Civilite"],
+        "date_naissance": ["Date"],
+        "date_consultation": ["Date"],
+        "date_deces": ["date_deces"],
+        "code_diag": ["Code_diag", "Code_diagnostic", "Code_diag"],
+        "code_postal": ["Code_postal"],
+        "region": ["region", "libelle_region", "Libelle_region", "Lib_reg"],
+        "departement": ["departement", "code_departement"],
+        "finess": ["finess", "Finess"],
+        "identifiant_organisation": ["identifiant_organisation", "finess_geo", "finess_pmsi"]
+    }
+    
+    for standard_name, variants in column_mappings.items():
+        for variant in variants:
+            if variant in df.columns and standard_name not in df.columns:
+                df = df.withColumnRenamed(variant, standard_name)
+    
+    # Normalisation par type
     for column in df.columns:
-        if column.startswith("_"):
-            continue
-        
         col_lower = column.lower()
-        
-        if "email" in col_lower or "mail" in col_lower:
-            df = df.withColumn(column, lower(col(column)))
-        elif "tel" in col_lower or "phone" in col_lower or "telephone" in col_lower:
+        col_type = df.schema[column].dataType
+
+        if "email" in col_lower and isinstance(col_type, StringType):
+            df = df.withColumn(column, lower(trim(col(column))))
+        elif ("tel" in col_lower or "phone" in col_lower) and isinstance(col_type, StringType):
             df = df.withColumn(column, regexp_replace(col(column), r"[^0-9+]", ""))
-        elif "code_postal" in col_lower or "cp" in col_lower or "postal" in col_lower:
-            df = df.withColumn(column, regexp_replace(col(column), r"[^0-9]", ""))
-        elif "nom" in col_lower or "prenom" in col_lower or "ville" in col_lower:
+        elif "code_postal" in col_lower and isinstance(col_type, StringType):
+            df = df.withColumn(column, regexp_replace(col(column), r"[^0-9A-Z]", ""))
+        elif ("sexe" in col_lower or "civilite" in col_lower) and isinstance(col_type, StringType):
             df = df.withColumn(
                 column,
-                when(col(column).isNotNull(), 
-                     regexp_replace(upper(col(column)), r"\s+", " "))
-                .otherwise(None)
+                when(upper(trim(col(column))).isin(["M", "MALE", "HOMME", "H", "1", "MONSIEUR"]), "M")
+                .when(upper(trim(col(column))).isin(["F", "FEMALE", "FEMME", "W", "2", "MADAME"]), "F")
+                .otherwise(upper(trim(col(column))))
             )
+        elif "finess" in col_lower and isinstance(col_type, StringType):
+            df = df.withColumn(column, regexp_replace(col(column), r"[^0-9]", ""))
     
-    # AJOUT: Normalisation des dates
+    # Normalisation dates
     df = normalize_dates(df)
     
     return df
 
-def anonymize_pii(df, pii_columns):
-    """Anonymise les données sensibles (PII) en utilisant SHA-256."""
+def generate_surrogate_keys(df, config):
+    """Génère les clés de substitution (SK) pour les dimensions."""
+    source_name = config["source_name"]
+    output_table = config["output_table"]
+    
+    # Clé de substitution principale pour la table
+    df = df.withColumn("_sk", sha2(concat_ws("_", lit(output_table), md5(concat_ws("|", *df.columns))), 256))
+    
+    # Clés de substitution pour les relations dimensionnelles basées sur les objectifs métier
+    if "id_patient" in df.columns:
+        df = df.withColumn("_sk_patient", sha2(col("id_patient").cast("string"), 256))
+    
+    if "identifiant" in df.columns and "professionnel" in output_table.lower():
+        df = df.withColumn("_sk_professionnel", sha2(col("identifiant").cast("string"), 256))
+    
+    if "id_prof_sante" in df.columns:
+        df = df.withColumn("_sk_prof_sante", sha2(col("id_prof_sante").cast("string"), 256))
+    
+    if "code_diag" in df.columns:
+        df = df.withColumn("_sk_diagnostic", sha2(col("code_diag").cast("string"), 256))
+    
+    if "identifiant_organisation" in df.columns or "finess" in df.columns:
+        # Clé pour les établissements (pour analyses par établissement)
+        finess_col = "identifiant_organisation" if "identifiant_organisation" in df.columns else "finess"
+        df = df.withColumn("_sk_etablissement", sha2(col(finess_col).cast("string"), 256))
+    
+    if "region" in df.columns:
+        df = df.withColumn("_sk_region", sha2(upper(trim(col("region"))).cast("string"), 256))
+    
+    if "code_postal" in df.columns:
+        df = df.withColumn("_sk_geographie", sha2(col("code_postal").cast("string"), 256))
+    
+    if "id_mut" in df.columns:
+        df = df.withColumn("_sk_mutuelle", sha2(col("id_mut").cast("string"), 256))
+    
+    if "code_cis" in df.columns:
+        df = df.withColumn("_sk_medicament", sha2(col("code_cis").cast("string"), 256))
+    
+    return df
+
+def add_technical_columns(df, config):
+    """Ajoute les colonnes techniques pour le tracking."""
+    source_name = config["source_name"]
+    output_table = config["output_table"]
+    
+    # Hash du record complet pour détection de changements
+    df = df.withColumn("_hash_record", sha2(concat_ws("|", *[coalesce(col(c).cast("string"), lit("")) for c in df.columns]), 256))
+    
+    # Métadonnées d'ingestion
+    df = df.withColumn("_ingestion_date", current_timestamp())
+    df = df.withColumn("_source_system", lit(source_name))
+    df = df.withColumn("_source_table", lit(output_table))
+    df = df.withColumn("_batch_id", lit(str(uuid_lib.uuid4())))
+    
+    # Version et flags pour historisation
+    df = df.withColumn("_version", lit(1))
+    df = df.withColumn("_is_current", lit(True))
+    df = df.withColumn("_is_deleted", lit(False))
+    
+    return df
+
+def anonymize_pii_analytical(df, config):
+    """Anonymise les données sensibles tout en préservant les dimensions analytiques."""
+    pii_columns = config.get("pii_columns", [])
+    
     for pii_col in pii_columns:
         if pii_col in df.columns:
-            df = df.withColumn(
-                pii_col,
-                when(col(pii_col).isNotNull(),
-                     sha2(col(pii_col).cast("string"), 256))
-                .otherwise(None)
-            )
-            print(f"  🔒 Colonne '{pii_col}' anonymisée")
+            col_lower = pii_col.lower()
+            
+            if any(keyword in col_lower for keyword in ["nom", "prenom"]):
+                # Anonymiser mais garder l'initiale pour analyses démographiques
+                df = df.withColumn(
+                    pii_col + "_anonymized",
+                    when(col(pii_col).isNotNull(), sha2(col(pii_col).cast("string"), 256))
+                    .otherwise(None)
+                )
+                # Garder l'initiale du prénom pour analyses
+                if "prenom" in col_lower:
+                    df = df.withColumn(
+                        "initiale_prenom",
+                        when(col(pii_col).isNotNull(), upper(substring(trim(col(pii_col)), 1, 1)))
+                        .otherwise(None)
+                    )
+                    
+            elif any(keyword in col_lower for keyword in ["ville", "adresse", "code_postal"]):
+                # Anonymiser mais extraire le département pour analyses géographiques
+                df = df.withColumn(
+                    pii_col + "_anonymized",
+                    when(col(pii_col).isNotNull(), sha2(col(pii_col).cast("string"), 256))
+                    .otherwise(None)
+                )
+                # Extraire le département si code postal
+                if "code_postal" in col_lower and "departement" not in df.columns:
+                    df = df.withColumn(
+                        "departement",
+                        when(length(col(pii_col)) >= 2, substring(col(pii_col), 1, 2))
+                        .otherwise(None)
+                    )
+                    
+            elif any(keyword in col_lower for keyword in ["email", "tel", "telephone", "num_secu"]):
+                # Anonymisation complète
+                df = df.withColumn(
+                    pii_col,
+                    when(col(pii_col).isNotNull(), sha2(col(pii_col).cast("string"), 256))
+                    .otherwise(None)
+                )
+            else:
+                # Anonymisation standard
+                df = df.withColumn(
+                    pii_col,
+                    when(col(pii_col).isNotNull(), sha2(col(pii_col).cast("string"), 256))
+                    .otherwise(None)
+                )
     
     return df
 
-def add_surrogate_key(df, sk_columns, output_table_name):
-    """Ajoute une clé de substitution (SK) basée sur les colonnes métier."""
-    if not sk_columns:
-        print(f"  ⚠️ Aucune colonne SK définie pour {output_table_name}")
-        return df
+def process_dataframe(df, config, source_type):
+    """Traite un DataFrame avec normalisation et anonymisation."""
+    # 1. Nettoyage colonnes
+    df = clean_col_names(df)
     
-    available_sk_cols = [c for c in sk_columns if c in df.columns]
+    # 2. Nettoyage données basique
+    for column in df.columns:
+        if isinstance(df.schema[column].dataType, StringType):
+            df = df.withColumn(column, 
+                when(trim(col(column)).isin(["NULL", "NA", "", "-", "nan"]), lit(None))
+                .otherwise(trim(col(column))))
     
-    if not available_sk_cols:
-        print(f"  ⚠️ Aucune colonne SK disponible pour {output_table_name}")
-        return df
+    # 3. Normalisation des données
+    df = normalize_data(df, config)
     
-    df = df.withColumn(
-        "sk_id",
-        sha2(concat_ws("||", *[coalesce(col(c).cast("string"), lit("NULL")) for c in available_sk_cols]), 256)
-    )
+    # 4. Anonymisation ciblée
+    df = anonymize_pii_analytical(df, config)
     
-    print(f"  🔑 Clé SK créée à partir de : {', '.join(available_sk_cols)}")
-    return df
-
-def add_technical_columns(df, source_name, output_table_name):
-    """Ajoute les colonnes techniques."""
-    generate_uuid_udf = udf(lambda: str(uuid_lib.uuid4()), StringType())
+    # 5. Clés de substitution
+    df = generate_surrogate_keys(df, config)
     
-    df = df.withColumn("_ingestion_date", current_timestamp())
-    df = df.withColumn("_source", lit(source_name))
-    df = df.withColumn("_table_name", lit(output_table_name))
-    df = df.withColumn("_record_uuid", generate_uuid_udf())
-    df = df.withColumn("_processing_timestamp", current_timestamp())
-    
-    non_tech_cols = [c for c in df.columns if not c.startswith("_")]
-    df = df.withColumn(
-        "_hash_record",
-        sha2(concat_ws("||", *[coalesce(col(c).cast("string"), lit("NULL")) for c in non_tech_cols]), 256)
-    )
+    # 6. Colonnes techniques
+    df = add_technical_columns(df, config)
     
     return df
 
-def get_data_quality_stats(df, output_table_name):
-    """Calcule et affiche des statistiques de qualité des données."""
-    total_rows = df.count()
-    total_cols = len([c for c in df.columns if not c.startswith("_")])
+def write_to_minio(df, output_table):
+    """Écrit les données dans MinIO."""
+    bronze_path = f"s3a://{MINIO_CONFIG['bucket']}/{output_table}"
     
-    print(f"\n  📊 Statistiques de qualité pour {output_table_name}:")
-    print(f"     - Nombre total de lignes : {total_rows}")
-    print(f"     - Nombre de colonnes métier : {total_cols}")
+    # Optimisation partitions
+    df = df.coalesce(2)
     
-    for column in [c for c in df.columns if not c.startswith("_")]:
-        null_count = df.filter(col(column).isNull()).count()
-        fill_rate = ((total_rows - null_count) / total_rows * 100) if total_rows > 0 else 0
-        if fill_rate < 100:
-            print(f"     - {column}: {fill_rate:.1f}% rempli ({null_count} nulls)")
+    # Nettoyage caractères de contrôle
+    for column in df.columns:
+        if isinstance(df.schema[column].dataType, StringType):
+            df = df.withColumn(column,
+                when(col(column).isNotNull(), 
+                     regexp_replace(col(column), r"[\x00-\x08\x0B-\x0C\x0E-\x1F]", "")))
+    
+    # Réorganisation des colonnes: techniques en premier
+    technical_cols = [c for c in df.columns if c.startswith('_')]
+    business_cols = [c for c in df.columns if not c.startswith('_')]
+    df = df.select(*technical_cols, *business_cols)
+    
+    df.write \
+        .mode("overwrite") \
+        .option("compression", "snappy") \
+        .option("maxRecordsPerFile", "500000") \
+        .parquet(bronze_path)
+    
+    return df.count()
 
-def process_source(spark, config):
-    """Fonction générique pour traiter une source et l'écrire dans MinIO."""
-    source_type = config["type"]
+def process_csv_source(spark, config):
+    """Traite une source CSV."""
     source_path = config["path"]
-    output_table_name = config["output_table"]
+    output_table = config["output_table"]
     
-    print(f"\n{'='*80}")
-    print(f"🚀 Début du traitement : {output_table_name}")
-    print(f"{'='*80}")
-    print(f"Type: {source_type} | Source: {config['source_name']}")
+    try:
+        # Lecture CSV avec options adaptées
+        df = spark.read \
+            .option("header", "true") \
+            .option("delimiter", config.get("delimiter", ";")) \
+            .option("encoding", config.get("encoding", "utf-8")) \
+            .option("inferSchema", "true") \
+            .csv(source_path)
+        
+        initial_count = df.count()
+        print(f"📥 CSV {output_table}: {initial_count} lignes")
+        
+        # Traitement
+        df_processed = process_dataframe(df, config, "csv")
+        
+        # Écriture
+        written_count = write_to_minio(df_processed, output_table)
+        
+        print(f"✅ CSV {output_table} traité: {written_count} lignes")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Erreur CSV {output_table}: {e}")
+        return False
+
+def process_postgres_source(spark, config):
+    """Traite une source PostgreSQL."""
+    source_path = config["path"]
+    output_table = config["output_table"]
 
     try:
-        # ========================================
-        # 1. LECTURE DE LA SOURCE
-        # ========================================
-        print(f"\n📥 Étape 1: Lecture de la source...")
-        
-        if source_type == "csv":
-            if not source_path.startswith("file:///") or os.path.exists(source_path.replace("file://", "")):
-                print(f"   ✓ Fichier trouvé: {source_path}")
-            else:
-                raise FileNotFoundError(f"Fichier non trouvé: {source_path}")
-
-            reader = spark.read \
-                .option("header", True) \
-                .option("inferSchema", True) \
-                .option("delimiter", config.get("delimiter", ",")) \
-                .option("encoding", "ISO-8859-1") \
-                .option("quote", "\"") \
-                .option("escape", "\"") \
-                .option("multiLine", True) \
-                .option("mode", "PERMISSIVE") \
-                .option("columnNameOfCorruptRecord", "_corrupt_record") \
-                .option("maxCharsPerColumn", "4096") \
-                .option("maxColumns", "20480") \
-                .option("recursiveFileLookup", "true") \
-                .option("pathGlobFilter", "*.csv")
-            
-            if "decimal" in config:
-                reader = reader.option("decimal", config["decimal"])
-            
-            df = reader.csv(source_path)
-
-        elif source_type == "excel":
-            print(f"   ⚠️ Lecture Excel désactivée")
-            return
-        elif source_type == "postgres":
-            print(f"   ⏳ Connexion à PostgreSQL (service Docker)...")
-            df = spark.read.format("jdbc") \
-                .option("url", "jdbc:postgresql://bigdata_postgres:5432/healthcare_data") \
-                .option("query", f"SELECT * FROM public.{source_path}") \
-                .option("user", "admin") \
-                .option("password", "admin123") \
-                .option("driver", "org.postgresql.Driver") \
-                .load()
-            print(f"   ✓ Données chargées depuis le service Docker PostgreSQL.")
-        else:
-            raise ValueError(f"Type de source non supporté : {source_type}")
-
+        # Lecture sécurisée de la table
+        df = read_postgres_table_safe(spark, source_path, config)
         initial_count = df.count()
-        print(f"   ✓ {initial_count} lignes lues")
-
-        # ========================================
-        # 2. NETTOYAGE DES NOMS DE COLONNES
-        # ========================================
-        print(f"\n🧹 Étape 2: Nettoyage des noms de colonnes...")
-        df = clean_col_names(df)
-        print(f"   ✓ Colonnes standardisées: {', '.join(df.columns[:5])}...")
-
-        # ========================================
-        # 3. NETTOYAGE DES DONNÉES
-        # ========================================
-        print(f"\n🧼 Étape 3: Nettoyage des données...")
-        df = clean_data(df)
-        before_empty_clean = df.count()
-        df = remove_empty_rows(df, threshold=0.3)
-        after_empty_clean = df.count()
-        removed_empty = before_empty_clean - after_empty_clean
-        if removed_empty > 0:
-            print(f"   ✓ {removed_empty} lignes vides supprimées")
-
-        # ========================================
-        # 4. NORMALISATION (AVEC DATES)
-        # ========================================
-        print(f"\n📐 Étape 4: Normalisation des données...")
-        df = normalize_data(df)
-        print(f"   ✓ Données normalisées (incluant les dates)")
-
-        # ========================================
-        # 5. AJOUT DES COLONNES TECHNIQUES
-        # ========================================
-        print(f"\n⚙️ Étape 5: Ajout des colonnes techniques...")
-        df = add_technical_columns(df, config["source_name"], output_table_name)
-        print(f"   ✓ Colonnes techniques ajoutées")
-
-        # ========================================
-        # 6. ANONYMISATION DES PII
-        # ========================================
-        print(f"\n🔐 Étape 6: Anonymisation des données sensibles...")
-        pii_columns = config.get("pii_columns", [])
-        if pii_columns:
-            df = anonymize_pii(df, pii_columns)
-        else:
-            print(f"   ℹ️ Aucune colonne PII à anonymiser")
-
-        # ========================================
-        # 7. AJOUT DE LA CLÉ DE SUBSTITUTION
-        # ========================================
-        print(f"\n🔑 Étape 7: Création de la clé de substitution...")
-        sk_columns = config.get("sk_columns", [])
-        df = add_surrogate_key(df, sk_columns, output_table_name)
-
-        # ========================================
-        # 8. SUPPRESSION DES DOUBLONS
-        # ========================================
-        print(f"\n🗑️ Étape 8: Suppression des doublons...")
-        before_dedup = df.count()
-        df = remove_duplicates(df, sk_columns)
-        after_dedup = df.count()
-        duplicates_removed = before_dedup - after_dedup
-        if duplicates_removed > 0:
-            print(f"   ✓ {duplicates_removed} doublons supprimés")
-        else:
-            print(f"   ✓ Aucun doublon trouvé")
-
-        # ========================================
-        # 9. STATISTIQUES DE QUALITÉ
-        # ========================================
-        get_data_quality_stats(df, output_table_name)
-
-        # ========================================
-        # 10. ÉCRITURE DANS MINIO (OBLIGATOIRE)
-        # ========================================
-        print(f"\n💾 Étape 10: Écriture dans MinIO (obligatoire)...")
-        minio_success, final_count = write_to_minio_direct(df, output_table_name)
         
-        # ========================================
-        # 11. AFFICHAGE DU SCHÉMA FINAL
-        # ========================================
-        print(f"\n📋 Schéma final:")
-        df.printSchema()
+        # Traitement
+        df_processed = process_dataframe(df, config, "postgres")
         
-        # ========================================
-        # RÉSUMÉ
-        # ========================================
-        print(f"\n✅ Traitement terminé avec succès!")
-        print(f"   - Lignes initiales : {initial_count}")
-        print(f"   - Lignes après nettoyage : {after_empty_clean}")
-        print(f"   - Lignes après dédoublonnage : {final_count}")
-        print(f"   - Taux de rétention : {(final_count/initial_count*100):.1f}%")
-        print(f"   - ✅ Données écrites dans MinIO avec succès")
-
+        # Écriture
+        written_count = write_to_minio(df_processed, output_table)
+        
+        print(f"✅ PostgreSQL {output_table} traité: {written_count} lignes")
+        return True
+        
     except Exception as e:
-        print(f"\n❌ ERREUR lors du traitement")
-        print(f"   Type: {type(e).__name__}")
-        print(f"   Message: {str(e)}")
-        raise
+        print(f"❌ Erreur PostgreSQL {output_table}: {e}")
+        return False
+
+def process_source(spark, config):
+    """Route vers le bon traitement selon le type de source."""
+    source_type = config["type"]
     
-    print(f"\n{'='*80}\n")
+    print(f"\n🎯 TRAITEMENT: {config['output_table']}")
+    
+    if source_type == "csv":
+        return process_csv_source(spark, config)
+    elif source_type == "postgres":
+        return process_postgres_source(spark, config)
+    else:
+        print(f"❌ Type non supporté: {source_type}")
+        return False
 
 if __name__ == "__main__":
     print("""
-    ╔══════════════════════════════════════════════════════════════╗
-    ║  BRONZE INGESTION PIPELINE - MinIO (ÉCRITURE OBLIGATOIRE)    ║
-    ║  Pipeline de nettoyage, normalisation et anonymisation       ║
-    ║  ✨ AVEC NORMALISATION DES DATES ✨                         ║
-    ╚══════════════════════════════════════════════════════════════╝
+    ╔══════════════════════════════════════╗
+    ║        PIPELINE BRONZE - MINIO       ║
+    ╚══════════════════════════════════════╝
     """)
+    
+    print(f"⚙️  Configuration:")
+    print(f"   - Mode ressources limitées: {LOW_RESOURCE_MODE}")
+    print(f"   - Filtre Décès 2019: ACTIVÉ")
+    print(f"   - Clés de substitution: ACTIVÉES")
+    print(f"   - Colonnes techniques: ACTIVÉES")
+    print(f"   - Parser dates legacy: ACTIVÉ (pour formats M/d/yyyy)")
     
     try:
         spark = get_spark_session()
         
-        # Test de connexion
-        print("🔍 Test de connexion à MinIO...")
-        if not test_minio_connection(spark):
-            print("💥 Impossible de se connecter à MinIO. Arrêt du pipeline.")
+        if not test_connections(spark):
+            print("💥 Erreur connexion")
             sys.exit(1)
         
-        print("🎯 Test MinIO réussi! Début du traitement des données...")
-        
-        # Configuration des sources avec clés optimisées pour les jointures
+        # CONFIGURATION COMPLÈTE POUR TOUTES LES DONNÉES
         source_configs = [
-            # Tables PostgreSQL - Données médicales
+            # === SOURCES POSTGRESQL - DONNÉES MÉTIER PRINCIPALES ===
             {
                 "type": "postgres",
-                "source_name": "Patient",
-                "path": "Patient",
+                "source_name": "Deces_2019",
+                "path": "\"deces\"",
+                "output_table": "deces",
+                "pii_columns": ["nom", "prenom", "adresse", "ville"],
+                "preserve_columns": ["sexe", "date_naissance", "date_deces", "code_postal", "region", "departement"]
+            },
+            {
+                "type": "postgres", 
+                "source_name": "Patients",
+                "path": "\"Patient\"",
                 "output_table": "patients",
-                "pii_columns": ["Nom", "Prenom", "EMail", "Tel", "Num_Secu"],
-                "sk_columns": ["Id_patient"],
-                "description": "Table principale des patients"
+                "pii_columns": ["Nom", "Prenom", "EMail", "Tel", "Num_Secu", "Adresse", "Ville"],
+                "preserve_columns": ["Sexe", "Date", "Code_postal", "Age"]
             },
             {
                 "type": "postgres",
-                "source_name": "Professionnel_de_sante",
-                "path": "Professionnel_de_sante",
-                "output_table": "professionnels_sante_pg",
-                "pii_columns": ["Nom", "Prenom"],
-                "sk_columns": ["Identifiant", "Code_specialite"],
-                "description": "Professionnels de santé"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Consultation",
-                "path": "Consultation",
+                "source_name": "Consultations",
+                "path": "\"Consultation\"",
                 "output_table": "consultations",
                 "pii_columns": [],
-                "sk_columns": ["Num_consultation", "Id_patient", "Id_prof_sante"],
-                "description": "Consultations médicales"
+                "preserve_columns": ["Date", "Code_diag", "Id_prof_sante", "Id_patient", "Id_mut"]
+            },
+            {
+                "type": "postgres",
+                "source_name": "Diagnostics",
+                "path": "\"Diagnostic\"",
+                "output_table": "diagnostics",
+                "pii_columns": [],
+                "preserve_columns": ["Code_diag", "Diagnostic"]
             },
             {
                 "type": "postgres",
                 "source_name": "Medicaments",
-                "path": "Medicaments",
+                "path": "\"Medicaments\"",
                 "output_table": "medicaments",
                 "pii_columns": [],
-                "sk_columns": ["Code_CIS"],
-                "description": "Référentiel des médicaments"
+                "preserve_columns": ["Code_CIS", "Denomination", "Forme_pharmaceutique"]
             },
             {
                 "type": "postgres",
-                "source_name": "Prescription",
-                "path": "Prescription",
+                "source_name": "Mutuelles",
+                "path": "\"Mutuelle\"",
+                "output_table": "mutuelles",
+                "pii_columns": ["Nom", "Adresse"],
+                "preserve_columns": ["Id_Mut"]
+            },
+            {
+                "type": "postgres",
+                "source_name": "Prescriptions",
+                "path": "\"Prescription\"",
                 "output_table": "prescriptions",
                 "pii_columns": [],
-                "sk_columns": ["Num_consultation", "Code_CIS"],
-                "description": "Prescriptions médicales"
+                "preserve_columns": ["Num_consultation", "Code_CIS"]
             },
             {
                 "type": "postgres",
-                "source_name": "Diagnostic",
-                "path": "Diagnostic",
-                "output_table": "diagnostics",
+                "source_name": "Professionnels_Sante",
+                "path": "\"Professionnel_de_sante\"",
+                "output_table": "professionnels_sante_pg",
+                "pii_columns": ["Nom", "Prenom"],
+                "preserve_columns": ["Civilite", "Profession", "Code_specialite", "Identifiant"]
+            },
+            {
+                "type": "postgres",
+                "source_name": "Adherents",
+                "path": "\"Adher\"",
+                "output_table": "adherents",
                 "pii_columns": [],
-                "sk_columns": ["Code_diag"],
-                "description": "Référentiel des diagnostics"
+                "preserve_columns": ["Id_patient", "Id_mut"]
             },
             {
                 "type": "postgres",
-                "source_name": "Mutuelle",
-                "path": "Mutuelle",
-                "output_table": "mutuelles",
-                "pii_columns": [],
-                "sk_columns": ["Id_Mut"],
-                "description": "Référentiel des mutuelles"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Adher",
-                "path": "Adher",
-                "output_table": "adherents_mutuelle",
-                "pii_columns": [],
-                "sk_columns": ["Id_patient", "Id_mut"],
-                "description": "Liens patients-mutuelles"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Specialites",
-                "path": "Specialites",
-                "output_table": "specialites",
-                "pii_columns": [],
-                "sk_columns": ["Code_specialite"],
-                "description": "Référentiel des spécialités médicales"
-            },
-            {
-                "type": "postgres",
-                "source_name": "Salle",
-                "path": "Salle",
+                "source_name": "Salles",
+                "path": "\"Salle\"",
                 "output_table": "salles",
                 "pii_columns": [],
-                "sk_columns": ["Id_salle", "Num_consultation"],
-                "description": "Gestion des salles de consultation"
+                "preserve_columns": ["Id_salle", "Num_consultation", "Code_bloc"]
             },
-            # Tables principales CSV
+            
+            # === SOURCES CSV - DONNÉES ÉTABLISSEMENTS ET QUALITÉ ===
             {
                 "type": "csv",
-                "source_name": "etablissement_sante.csv",
+                "source_name": "Etablissements",
                 "path": "file:///data/source/csv/etablissement_sante.csv",
+                "output_table": "etablissements",
+                "encoding": "utf-8",
                 "delimiter": ";",
-                "output_table": "etablissement_sante",
-                "pii_columns": ["email", "telephone", "telephone_2", "siret_site"],
-                "sk_columns": ["finess_site", "identifiant_organisation"],
-                "description": "Table maîtresse des établissements"
+                "pii_columns": ["email", "telephone", "telephone_2", "adresse"],
+                "preserve_columns": ["region", "departement", "code_postal", "ville", "finess_site", "identifiant_organisation"]
             },
             {
                 "type": "csv",
-                "source_name": "professionnel_sante.csv",
+                "source_name": "Professionnels",
                 "path": "file:///data/source/csv/professionnel_sante.csv",
+                "output_table": "professionnels",
+                "encoding": "Windows-1252",
                 "delimiter": ";",
-                "output_table": "professionnel_sante",
                 "pii_columns": ["nom", "prenom"],
-                "sk_columns": ["identifiant"],
-                "description": "Référentiel des professionnels"
+                "preserve_columns": ["specialite", "region_exercice", "date_naissance", "sexe", "identifiant"]
             },
             {
                 "type": "csv",
-                "source_name": "activite_professionnel_sante.csv",
+                "source_name": "Activites_Pro",
                 "path": "file:///data/source/csv/activite_professionnel_sante.csv",
+                "output_table": "activites_professionnels",
+                "encoding": "utf-8",
                 "delimiter": ";",
-                "output_table": "activite_professionnel_sante",
-                "pii_columns": ["identifiant"],
-                "sk_columns": ["identifiant", "identifiant_organisation"],
-                "description": "Lien entre professionnels et établissements"
-            },
-            {
-                "type": "postgres",
-                "source_name": "deces",
-                "path": "deces",
-                "output_table": "deces",
-                "pii_columns": ["nom", "prenom", "numero_acte_deces"],
-                "sk_columns": ["numero_acte_deces", "code_lieu_deces"],
-                "description": "Registre des décès depuis PostgreSQL"
+                "pii_columns": [],
+                "preserve_columns": ["date_activite", "type_activite", "etablissement", "identifiant", "identifiant_organisation"]
             },
             {
                 "type": "csv",
-                "source_name": "Hospitalisations.csv",
+                "source_name": "Hospitalisations_CSV",
                 "path": "file:///data/source/csv/Hospitalisations.csv",
-                "delimiter": ";",
                 "output_table": "hospitalisations",
-                "pii_columns": ["Id_patient"],
-                "sk_columns": ["Num_Hospitalisation", "identifiant_organisation"],
-                "description": "Données d'hospitalisation avec lien vers établissements"
-            },
-        {"type": "csv", "source_name": "Hospitalisations.csv", "path": "file:///data/source/csv/Hospitalisations.csv", "delimiter": ";", "output_table": "hospitalisations", "pii_columns": ["id_patient"], "sk_columns": ["num_hospitalisation"]},
-                    # Tables de satisfaction 2013
-            {
-                "type": "csv",
-                "source_name": "DPA_SSR_recueil2014_donnee2013_table_es.csv",
-                "path": "file:///data/source/csv/DPA_SSR_recueil2014_donnee2013_table_es.csv",
+                "encoding": "ascii",
                 "delimiter": ";",
-                "output_table": "satisfaction_2013_dpa_ssr_es",
-                "pii_columns": [],
-                "sk_columns": ["finess", "Sources"],
-                "description": "Satisfaction SSR 2013 - Établissements"
+                "pii_columns": ["nom_patient", "prenom_patient"],
+                "preserve_columns": ["sexe", "date_naissance", "region", "diagnostic_principal", "date_admission", "date_sortie", "identifiant_organisation", "Id_patient"]
             },
+            
+            # === SOURCES CSV - DONNÉES DE SATISFACTION ET QUALITÉ (2019-2020) ===
             {
                 "type": "csv",
-                "source_name": "DPA_SSR_recueil2014_donnee2013_table_participant.csv",
-                "path": "file:///data/source/csv/DPA_SSR_recueil2014_donnee2013_table_participant.csv",
+                "source_name": "Satisfaction_MCO_2019",
+                "path": "file:///data/source/csv/resultats-esatisca-mco-open-data-2019.csv",
+                "output_table": "satisfaction_mco_2019",
+                "encoding": "Windows-1252",
                 "delimiter": ";",
-                "output_table": "satisfaction_2013_dpa_ssr_participant",
                 "pii_columns": [],
-                "sk_columns": ["finess", "sources"],
-                "description": "Satisfaction SSR 2013 - Participants"
+                "preserve_columns": ["finess", "region", "score_all_ajust", "classement", "evolution"]
             },
             {
                 "type": "csv",
-                "source_name": "RCP_MCO_recueil2014_donnee2013_table_es.csv",
+                "source_name": "Satisfaction_48h_2019",
+                "path": "file:///data/source/csv/resultats-esatis48h-mco-open-data-2019.csv",
+                "output_table": "satisfaction_48h_2019",
+                "encoding": "Windows-1252",
+                "delimiter": ";",
+                "pii_columns": [],
+                "preserve_columns": ["finess", "region", "score_all_rea_ajust", "classement", "evolution"]
+            },
+            {
+                "type": "csv",
+                "source_name": "IQSS_2019",
+                "path": "file:///data/source/csv/resultats-iqss-open-data-2019.csv",
+                "output_table": "iqss_2019",
+                "encoding": "ISO-8859-1",
+                "delimiter": ";",
+                "pii_columns": [],
+                "preserve_columns": ["finess", "region", "type", "res_ias_icsha_v3_mhs", "res_dpa_qls_v2_mco"]
+            },
+            
+            # === SOURCES CSV - DONNÉES HISTORIQUES QUALITÉ (2013-2018) ===
+            {
+                "type": "csv",
+                "source_name": "RCP_MCO_2017",
+                "path": "file:///data/source/csv/rcp-mco-recueil2018-donnee2017-donnees.csv",
+                "output_table": "rcp_mco_2017",
+                "encoding": "ISO-8859-1",
+                "delimiter": ";",
+                "pii_columns": [],
+                "preserve_columns": ["finess", "Lib_reg", "rcp2_c2_etbt", "rcp2_c2_pos_seuil_etbt"]
+            },
+            {
+                "type": "csv",
+                "source_name": "DPA_SSR_2017",
+                "path": "file:///data/source/csv/dpa-ssr-recueil2018-donnee2017-donnees.csv",
+                "output_table": "dpa_ssr_2017",
+                "encoding": "ISO-8859-1",
+                "delimiter": ";",
+                "pii_columns": [],
+                "preserve_columns": ["finess", "Lib_reg", "doc_c_etbt", "dtn2_c2_etbt"]
+            },
+            {
+                "type": "csv",
+                "source_name": "RCP_MCO_2013",
                 "path": "file:///data/source/csv/RCP_MCO_recueil2014_donnee2013_table_es.csv",
+                "output_table": "rcp_mco_2013",
+                "encoding": "ISO-8859-1",
                 "delimiter": ";",
-                "output_table": "satisfaction_2013_rcp_mco_es",
                 "pii_columns": [],
-                "sk_columns": ["finess", "Sources"],
-                "description": "Satisfaction MCO 2013 - Établissements"
+                "preserve_columns": ["finess", "Libelle_region", "rcp2_c2_etbt", "rcp2_c2_icbas_etbt", "rcp2_c2_ichaut_etbt"]
             },
-        {"type": "csv", "source_name": "RCP_MCO_recueil2014_donnee2013_table_participant.csv", "path": "file:///data/source/csv/RCP_MCO_recueil2014_donnee2013_table_participant.csv", "delimiter": ";", "output_table": "satisfaction_2013_rcp_mco_participant", "pii_columns": [], "sk_columns": ["finess"]},
-        {"type": "csv", "source_name": "hpp_mco_recueil2015_donnee2014_tables_es.csv", "path": "file:///data/source/csv/hpp_mco_recueil2015_donnee2014_tables_es.csv", "delimiter": ";", "output_table": "satisfaction_2014_hpp_mco_es", "pii_columns": [], "sk_columns": ["finess"]},
-        {"type": "csv", "source_name": "idm_mco_recueil2015_donnee2014_tables_es.csv", "path": "file:///data/source/csv/idm_mco_recueil2015_donnee2014_tables_es.csv", "delimiter": ";", "output_table": "satisfaction_2014_idm_mco_es", "pii_columns": [], "sk_columns": ["finess"]},
-        {"type": "csv", "source_name": "dan_mco_recueil2016_donnee2015_donnees.csv", "path": "file:///data/source/csv/dan_mco_recueil2016_donnee2015_donnees.csv", "delimiter": ",", "output_table": "satisfaction_2015_dan_mco", "pii_columns": [], "sk_columns": ["finess"]},
-        {"type": "csv", "source_name": "dpa_had_recueil2016_donnee2015_donnees.csv", "path": "file:///data/source/csv/dpa_had_recueil2016_donnee2015_donnees.csv", "delimiter": ",", "output_table": "satisfaction_2015_dpa_had", "pii_columns": [], "sk_columns": ["finess"]},
-        {"type": "csv", "source_name": "dpa-ssr-recueil2018-donnee2017-donnees.csv", "path": "file:///data/source/csv/dpa-ssr-recueil2018-donnee2017-donnees.csv", "delimiter": ";", "output_table": "satisfaction_2017_dpa_ssr", "pii_columns": [], "sk_columns": ["finess"]},
-        {"type": "csv", "source_name": "ete-ortho-ipaqss-2017-2018-donnees.csv", "path": "file:///data/source/csv/ete-ortho-ipaqss-2017-2018-donnees.csv", "delimiter": ";", "output_table": "satisfaction_2017_2018_ete_ortho", "pii_columns": [], "sk_columns": ["finess"]},
-        {"type": "csv", "source_name": "rcp-mco-recueil2018-donnee2017-donnees.csv", "path": "file:///data/source/csv/rcp-mco-recueil2018-donnee2017-donnees.csv", "delimiter": ";", "output_table": "satisfaction_2017_rcp_mco", "pii_columns": [], "sk_columns": ["finess"]},
-        {"type": "csv", "source_name": "ESATIS48H_MCO_recueil2017_donnees.csv", "path": "file:///data/source/csv/ESATIS48H_MCO_recueil2017_donnees.csv", "delimiter": ";", "output_table": "satisfaction_2017_esatis48h", "pii_columns": [], "sk_columns": ["finess"]},
-        {"type": "csv", "source_name": "resultats-esatis48h-mco-open-data-2019.csv", "path": "file:///data/source/csv/resultats-esatis48h-mco-open-data-2019.csv", "delimiter": ";", "decimal": ",", "output_table": "satisfaction_2019_esatis48h", "pii_columns": [], "sk_columns": ["finess"]},
-        {"type": "csv", "source_name": "resultats-esatisca-mco-open-data-2019.csv", "path": "file:///data/source/csv/resultats-esatisca-mco-open-data-2019.csv", "delimiter": ";", "decimal": ",", "output_table": "satisfaction_2019_esatisca", "pii_columns": [], "sk_columns": ["finess"]},
-        {"type": "csv", "source_name": "resultats-iqss-open-data-2019.csv", "path": "file:///data/source/csv/resultats-iqss-open-data-2019.csv", "delimiter": ";", "decimal": ",", "output_table": "satisfaction_2019_iqss", "pii_columns": [], "sk_columns": ["finess"]},
+            {
+                "type": "csv",
+                "source_name": "DPA_SSR_2013",
+                "path": "file:///data/source/csv/DPA_SSR_recueil2014_donnee2013_table_es.csv",
+                "output_table": "dpa_ssr_2013",
+                "encoding": "ISO-8859-1",
+                "delimiter": ";",
+                "pii_columns": [],
+                "preserve_columns": ["finess", "libelle_region", "tdp_c_etbt", "dec_c_etbt", "trd_c_etbt"]
+            },
+            {
+                "type": "csv",
+                "source_name": "ETE_ORTHO_2017",
+                "path": "file:///data/source/csv/ete-ortho-ipaqss-2017-2018-donnees.csv",
+                "output_table": "ete_ortho_2017",
+                "encoding": "ISO-8859-1",
+                "delimiter": ";",
+                "pii_columns": [],
+                "preserve_columns": ["finess", "region", "ete_ortho_etbt", "ete_ortho_pos_seuil_etbt"]
+            },
+            {
+                "type": "csv",
+                "source_name": "DAN_MCO_2015",
+                "path": "file:///data/source/csv/dan_mco_recueil2016_donnee2015_donnees.csv",
+                "output_table": "dan_mco_2015",
+                "encoding": "ISO-8859-1",
+                "delimiter": ",",
+                "pii_columns": [],
+                "preserve_columns": ["finess", "lib_reg", "tda_c_etbt", "trd_c_etbt"]
+            },
+            {
+                "type": "csv",
+                "source_name": "HPP_MCO_2014",
+                "path": "file:///data/source/csv/hpp_mco_recueil2015_donnee2014_tables_es.csv",
+                "output_table": "hpp_mco_2014",
+                "encoding": "ISO-8859-1",
+                "delimiter": ";",
+                "pii_columns": [],
+                "preserve_columns": ["finess", "lib_reg", "del1_c1_etbt", "peci_hppi_c_etbt"]
+            },
+            {
+                "type": "csv",
+                "source_name": "IDM_MCO_2014",
+                "path": "file:///data/source/csv/idm_mco_recueil2015_donnee2014_tables_es.csv",
+                "output_table": "idm_mco_2014",
+                "encoding": "ISO-8859-1",
+                "delimiter": ";",
+                "pii_columns": [],
+                "preserve_columns": ["finess", "lib_reg", "basi_c_etbt", "hyg_c_etbt"]
+            },
+            {
+                "type": "csv",
+                "source_name": "DPA_HAD_2015",
+                "path": "file:///data/source/csv/dpa_had_recueil2016_donnee2015_donnees.csv",
+                "output_table": "dpa_had_2015",
+                "encoding": "Windows-1252",
+                "delimiter": ",",
+                "pii_columns": [],
+                "preserve_columns": ["finess", "lib_reg", "dec_c_etbt", "tdp_c_etbt", "trd_c_etbt"]
+            },
+            {
+                "type": "csv",
+                "source_name": "ESATIS48H_2017",
+                "path": "file:///data/source/csv/ESATIS48H_MCO_recueil2017_donnees.csv",
+                "output_table": "esatis48h_2017",
+                "encoding": "ISO-8859-1",
+                "delimiter": ";",
+                "pii_columns": [],
+                "preserve_columns": ["finess", "region", "score_all_rea_ajust", "classement"]
+            }
         ]
 
-        # Traitement des sources
         successful_tables = []
+        failed_tables = []
         
         for config in source_configs:
             try:
-                process_source(spark, config)
-                successful_tables.append(config["output_table"])
+                success = process_source(spark, config)
+                if success:
+                    successful_tables.append(config["output_table"])
+                else:
+                    failed_tables.append(config["output_table"])
             except Exception as e:
-                print(f"💥 Échec critique pour {config['output_table']}: {e}")
-                print("💥 Arrêt du pipeline en raison de l'échec d'écriture MinIO")
-                spark.stop()
-                sys.exit(1)
-
+                print(f"💥 Échec {config['output_table']}: {e}")
+                failed_tables.append(config["output_table"])
+        
         spark.stop()
         
-        # Résumé final
-        print("\n" + "="*80)
-        print("🎉 PIPELINE BRONZE TERMINÉ AVEC SUCCÈS!")
-        print("="*80)
-        print(f"✅ Tables traitées et écrites dans MinIO: {len(successful_tables)}")
-        for table in successful_tables:
-            print(f"   - {table}")
-        print(f"\n📊 Toutes les données sont maintenant dans MinIO: s3a://bronze/")
-        print("="*80)
+        # RAPPORT FINAL
+        print(f"\n🎉 PIPELINE BRONZE TERMINÉ")
+        print(f"✅ Succès: {len(successful_tables)} tables")
+        print(f"❌ Échecs: {len(failed_tables)} tables")
+        print(f"💾 Données dans MinIO: s3a://{MINIO_CONFIG['bucket']}/")
+        print(f"🔑 Clés de substitution générées pour toutes les tables")
+        print(f"📊 Colonnes techniques ajoutées (_ingestion_date, _hash_record, etc.)")
         
+        # RAPPORT DES TABLES TRAITÉES
+        print(f"\n📋 TABLES TRAITÉES:")
+        for table in successful_tables:
+            print(f"   ✅ {table}")
+        if failed_tables:
+            print(f"\n⚠️  TABLES EN ÉCHEC:")
+            for table in failed_tables:
+                print(f"   ❌ {table}")
+                
     except Exception as e:
-        print(f"💥 Erreur critique du pipeline: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"💥 Erreur: {e}")
         sys.exit(1)
