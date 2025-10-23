@@ -196,7 +196,7 @@ services:
     command: start-notebook.sh --NotebookApp.token='admin123' --NotebookApp.password=''
 
   # ============================================================
-  # SUPERSET
+  # SUPERSET 
   # ============================================================
   superset-db:
     image: postgres:15-alpine
@@ -224,19 +224,28 @@ services:
       DATABASE_DB: superset
       DATABASE_USER: superset
       DATABASE_PASSWORD: superset123
+      # Ajoutez ces variables pour éviter SQLite
+      SUPERSET_ENV: production
+      FLASK_ENV: production
     ports:
       - "8088:8088"
     volumes:
-      - ./superset/config:/app/superset_home
+      - ./superset:/app/superset_home  # Modifié le chemin
     networks:
       - bigdata_network
     restart: unless-stopped
     command: >
       bash -c "
-        superset db upgrade &&
-        superset fab create-admin --username admin --firstname Admin --lastname User --email admin@chu.com --password admin123 || true &&
-        superset init &&
-        /usr/bin/run-server.sh
+        /bin/bash -c '
+          until pg_isready -h superset-db -p 5432; do
+            echo \"Waiting for PostgreSQL...\";
+            sleep 2;
+          done;
+          superset db upgrade;
+          superset fab create-admin --username admin --firstname Admin --lastname User --email admin@chu.com --password admin123 || true;
+          superset init;
+          /usr/bin/run-server.sh
+        '
       "
 
 volumes:

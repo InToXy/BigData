@@ -1,842 +1,882 @@
 import os
+import sys
+import time
+from datetime import datetime
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
-    col, year, month, dayofmonth, to_date, count, sum, avg,
-    when, lit, datediff, months_between, round, expr,
-    countDistinct, dense_rank, row_number, desc, upper, trim,
-    regexp_replace, coalesce, length, substring, concat_ws,
-    current_timestamp, md5, sha2, mean, stddev, isnan, isnull,
-    create_map, regexp_extract, lower, split, explode, size,
-    array_contains, monotonically_increasing_id, quarter, 
-    dayofweek, date_format, hour, minute, weekofyear
-)
-from pyspark.sql.types import (
-    StructType, StructField, StringType, IntegerType, 
-    DoubleType, DateType, TimestampType, BooleanType, FloatType
+    col, count, countDistinct, sum as spark_sum, avg, min, max,
+    when, lit, datediff, floor, year, month, quarter,
+    row_number, rank, percent_rank, lag, lead,
+    concat_ws, split, regexp_extract, regexp_replace, upper, trim,
+    date_add, current_date, current_timestamp, hour,
+    broadcast, expr, array_contains, collect_list, first
 )
 from pyspark.sql.window import Window
-import os
-import re
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, DateType, TimestampType
 
-# Configuration MinIO
+# Configuration
 MINIO_CONFIG = {
     "endpoint": "http://minio:9000",
     "access_key": "minioadmin", 
     "secret_key": "minioadmin123",
-    "bucket_silver": "silver",
-    "bucket_bronze": "bronze"
+    "bronze_bucket": "bronze",
+    "silver_bucket": "silver"
 }
 
-# Configuration du partitionnement
-PARTITIONING_CONFIG = {
-    "fact_consultation": ["annee_consultation", "mois_consultation"],
-    "fact_hospitalisation": ["annee_entree"],
-    "fact_deces": ["annee_deces"],
-    "fact_satisfaction": ["annee_enquete"],
-    "mart_taux_consultation_etablissement": ["annee_consultation"],
-    "mart_taux_consultation_diagnostic": ["annee_consultation"],
-    "mart_taux_hospitalisation_global": ["annee_entree"],
-    "mart_taux_hospitalisation_diagnostic": ["annee_entree"],
-    "mart_taux_hospitalisation_demographie": ["annee_entree"],
-    "mart_taux_consultation_professionnel": ["annee_consultation"],
-    "mart_deces_localisation": ["annee_deces"],
-    "mart_satisfaction_region": ["annee_enquete"]
-}
+# Décorateur pour le monitoring
+def log_transformation(func):
+    """Décorateur pour logger les transformations"""
+    def wrapper(*args, **kwargs):
+        table_name = kwargs.get('table_name', func.__name__)
+        start_time = time.time()
+        print(f"🔄 [{datetime.now()}] Début: {table_name}")
+        
+        result = func(*args, **kwargs)
+        
+        duration = time.time() - start_time
+        count = result.count() if hasattr(result, 'count') else 0
+        print(f"✅ [{datetime.now()}] Fin: {table_name} - {count:,} lignes - {duration:.2f}s")
+        
+        return result
+    return wrapper
+
+# Métriques de qualité
+def compute_quality_metrics(df, table_name):
+    """Calcule des métriques de qualité"""
+    total_rows = df.count()
+    
+    metrics = {
+        "table": table_name,
+        "total_rows": total_rows,
+        "null_rates": {},
+        "distinct_counts": {}
+    }
+    
+    for col_name in df.columns:
+        null_count = df.filter(col(col_name).isNull()).count()
+        metrics["null_rates"][col_name] = null_count / total_rows * 100 if total_rows > 0 else 0
+        
+        if total_rows < 1000000:  # Limiter pour les grandes tables
+            metrics["distinct_counts"][col_name] = df.select(col_name).distinct().count()
+    
+    print(f"📊 Métriques {table_name}:")
+    print(f"   - Lignes: {total_rows:,}")
+    print(f"   - Colonnes avec >10% nulls: {[k for k,v in metrics['null_rates'].items() if v > 10]}")
+    
+    return metrics
 
 def get_spark_session():
-    """Session Spark optimisée pour Silver."""
+    """Session Spark optimisée pour le traitement Silver."""
     try:
-        jars_dir = "/home/jovyan/jars"
-        jar_files = [
-            f"{jars_dir}/hadoop-aws-3.3.4.jar",
-            f"{jars_dir}/aws-java-sdk-bundle-1.12.262.jar",
-            f"{jars_dir}/hadoop-common-3.3.4.jar"
-        ]
-        
-        # Vérification des JARs
-        for jar in jar_files:
-            if not os.path.exists(jar):
-                print(f"⚠️  JAR manquant: {jar} - continuation sans ce JAR")
-                jar_files.remove(jar)
-        
-        if not jar_files:
-            print("⚠️  Aucun JAR trouvé - utilisation de Spark sans S3 optimisé")
-            jars_path = None
-        else:
-            jars_path = ",".join(jar_files)
-            print(f"📚 JARs chargés: {len(jar_files)}")
-        
-        # Configuration Spark de base d'abord
         builder = SparkSession.builder \
-            .appName("Silver_Pipeline_Gold_Ready") \
+            .appName("Silver Layer Processor") \
             .config("spark.sql.adaptive.enabled", "true") \
             .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
             .config("spark.sql.adaptive.skew.enabled", "true") \
-            .config("spark.sql.shuffle.partitions", "100") \
+            .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
+            .config("spark.sql.sources.partitionOverwriteMode", "dynamic") \
+            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+            .config("spark.hadoop.fs.s3a.endpoint", MINIO_CONFIG["endpoint"]) \
+            .config("spark.hadoop.fs.s3a.access.key", MINIO_CONFIG["access_key"]) \
+            .config("spark.hadoop.fs.s3a.secret.key", MINIO_CONFIG["secret_key"]) \
+            .config("spark.hadoop.fs.s3a.path.style.access", "true") \
             .config("spark.sql.parquet.compression.codec", "snappy") \
-            .config("spark.driver.memory", "2g") \
-            .config("spark.executor.memory", "2g")
-        
-        # Ajouter les JARs seulement s'ils existent
-        if jars_path:
-            builder = builder.config("spark.jars", jars_path)
-            
-        # Configuration S3A seulement si les JARs sont disponibles
-        if jar_files:
-            hadoop_conf = {
-                "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
-                "spark.hadoop.fs.s3a.aws.credentials.provider": "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
-                "spark.hadoop.fs.s3a.endpoint": MINIO_CONFIG["endpoint"],
-                "spark.hadoop.fs.s3a.access.key": MINIO_CONFIG["access_key"],
-                "spark.hadoop.fs.s3a.secret.key": MINIO_CONFIG["secret_key"],
-                "spark.hadoop.fs.s3a.path.style.access": "true",
-                "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
-                "spark.hadoop.fs.s3a.fast.upload": "true"
-            }
-            
-            for key, value in hadoop_conf.items():
-                builder = builder.config(key, value)
+            .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false") \
+            .config("spark.sql.autoBroadcastJoinThreshold", "10485760")  # 10MB pour broadcast
         
         spark = builder.getOrCreate()
         spark.sparkContext.setLogLevel("WARN")
         
-        # Configuration Hadoop explicite seulement si les JARs sont disponibles
-        if jar_files:
-            try:
-                hadoop_conf = spark._jsc.hadoopConfiguration()
-                hadoop_conf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-                hadoop_conf.set("fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
-                hadoop_conf.set("fs.s3a.endpoint", MINIO_CONFIG["endpoint"])
-                hadoop_conf.set("fs.s3a.access.key", MINIO_CONFIG["access_key"])
-                hadoop_conf.set("fs.s3a.secret.key", MINIO_CONFIG["secret_key"])
-                hadoop_conf.set("fs.s3a.path.style.access", "true")
-                hadoop_conf.set("fs.s3a.fast.upload", "true")
-                print("✅ Configuration S3A appliquée")
-            except Exception as hadoop_error:
-                print(f"⚠️  Erreur configuration Hadoop: {hadoop_error}")
-        
-        print("✅ Spark Silver initialisé (prêt pour Gold)")
+        print("✅ Spark Silver initialisé")
         return spark
         
     except Exception as e:
         print(f"❌ Erreur Spark Silver: {e}")
-        # Essayer de créer une session Spark basique sans configuration avancée
-        try:
-            print("🔄 Tentative de création d'une session Spark basique...")
-            spark = SparkSession.builder \
-                .appName("Silver_Pipeline_Basic") \
-                .getOrCreate()
-            spark.sparkContext.setLogLevel("WARN")
-            print("✅ Session Spark basique créée")
-            return spark
-        except Exception as fallback_error:
-            print(f"❌ Échec de la création de session Spark: {fallback_error}")
-            raise
-            
+        raise
+
 def read_bronze_table(spark, table_name):
-    """Lit une table depuis Bronze avec optimisation."""
+    """Lit une table depuis le layer Bronze."""
     try:
-        bronze_path = f"s3a://{MINIO_CONFIG['bucket_bronze']}/{table_name}"
-        print(f"📂 Lecture {table_name} depuis Bronze...")
-        
-        df = spark.read \
-            .option("mergeSchema", "true") \
-            .parquet(bronze_path)
-        
-        # Métadonnées pour Gold - utilisation de count() avec gestion d'erreur
-        try:
-            row_count = df.count()
-            print(f"  ✅ {row_count:,} lignes | {len(df.columns)} colonnes")
-        except Exception as count_error:
-            print(f"  ⚠️  Impossible de compter les lignes: {count_error}")
-            print(f"  📊 Schema: {len(df.columns)} colonnes")
-            row_count = 0
-        
-        return df  # Retirer le cache() pour éviter les problèmes
-        
+        bronze_path = f"s3a://{MINIO_CONFIG['bronze_bucket']}/{table_name}"
+        df = spark.read.parquet(bronze_path)
+        print(f"✅ Bronze '{table_name}' lu: {df.count()} lignes")
+        return df
     except Exception as e:
-        print(f"❌ Erreur lecture {table_name}: {e}")
+        print(f"❌ Erreur lecture Bronze {table_name}: {e}")
         raise
 
-def create_conformed_dimensions(spark):
-    """Crée les dimensions conformées pour Gold."""
-    print("\n🏗️ CRÉATION DES DIMENSIONS POUR GOLD")
-    
-    dimensions = {}
-    
+def write_silver_table(df, table_name, partition_cols=None):
+    """Écrit une table dans le layer Silver."""
     try:
-        # Dimension Patient enrichie
-        patients = read_bronze_table(spark, "patients")
-        dim_patient = patients.select(
-            col("_sk_patient").alias("patient_sk"),
-            col("id_patient").alias("patient_nk"),
-            col("nom"),
-            col("prenom"),
-            col("sexe"),
-            to_date(col("date_naissance")).alias("date_naissance"),
+        silver_path = f"s3a://{MINIO_CONFIG['silver_bucket']}/{table_name}"
+        
+        writer = df.write.mode("overwrite")
+        
+        if partition_cols:
+            writer = writer.partitionBy(partition_cols)
             
-            # Démographie enrichie
-            year(current_timestamp()).alias("current_year"),
-            (year(current_timestamp()) - year(to_date(col("date_naissance")))).alias("age"),
-            
-            # Tranches d'âge standardisées
-            when((year(current_timestamp()) - year(to_date(col("date_naissance")))).isNull(), "Inconnu")
-            .when((year(current_timestamp()) - year(to_date(col("date_naissance")))) < 18, "0-17")
-            .when((year(current_timestamp()) - year(to_date(col("date_naissance")))) <= 35, "18-35")
-            .when((year(current_timestamp()) - year(to_date(col("date_naissance")))) <= 55, "36-55")
-            .when((year(current_timestamp()) - year(to_date(col("date_naissance")))) <= 75, "56-75")
-            .otherwise("75+").alias("tranche_age"),
-            
-            # Géographie normalisée
-            upper(trim(col("Ville"))).alias("ville_normalisee"),
-            when(length(trim(col("code_postal"))) == 5, substring(trim(col("code_postal")), 1, 2))
-              .otherwise("99").alias("departement_code"),
-            
-            # Metadata pour Gold
-            current_timestamp().alias("silver_created_at"),
-            lit("silver_layer").alias("source_layer"),
-            lit(1).alias("is_active")
-        ).distinct()
+        writer.option("compression", "snappy") \
+              .option("maxRecordsPerFile", "100000") \
+              .parquet(silver_path)
         
-        patient_count = dim_patient.count()
-        print(f"  ✅ Dim Patient: {patient_count:,} patients uniques")
-        dimensions["dim_patient"] = dim_patient
-        
-        # Dimension Établissement
-        etablissements = read_bronze_table(spark, "etablissements")
-        
-        # Vérification des colonnes disponibles pour debug
-        available_columns = set(etablissements.columns)
-        print(f"  🔍 Colonnes disponibles dans etablissements: {len(available_columns)}")
-        
-        # Construction dynamique basée sur les colonnes réelles
-        select_exprs = [
-            col("_sk_etablissement").alias("etablissement_sk"),
-            col("identifiant_organisation").alias("etablissement_nk"),
-            col("raison_sociale_site").alias("nom_etablissement"),
-            
-            # Catégorisation standardisée
-            when(lower(col("raison_sociale_site")).contains("chu"), "CHU")
-            .when(lower(col("raison_sociale_site")).contains("hopital"), "Hôpital")
-            .when(lower(col("raison_sociale_site")).contains("clinique"), "Clinique")
-            .when(lower(col("raison_sociale_site")).contains("centre hospitalier"), "Centre Hospitalier")
-            .otherwise("Autre").alias("type_etablissement"),
-        ]
-        
-        # Géographie basée sur les colonnes disponibles
-        if 'commune' in available_columns:
-            select_exprs.append(upper(trim(col("commune"))).alias("commune_normalisee"))
-        else:
-            select_exprs.append(lit("Commune inconnue").alias("commune_normalisee"))
-        
-        # Département déduit du code postal
-        if 'code_postal' in available_columns:
-            select_exprs.append(
-                when(length(trim(col("code_postal"))) == 5, 
-                     substring(trim(col("code_postal")), 1, 2))
-                .otherwise("99").alias("departement_code")
-            )
-            select_exprs.append(
-                when(length(trim(col("code_postal"))) == 5, 
-                     concat_ws(" ", lit("Département"), substring(trim(col("code_postal")), 1, 2)))
-                .otherwise("Département inconnu").alias("departement_normalise")
-            )
-        else:
-            select_exprs.append(lit("99").alias("departement_code"))
-            select_exprs.append(lit("Département inconnu").alias("departement_normalise"))
-        
-        # Région déduite du code postal (approximation France)
-        if 'code_postal' in available_columns:
-            select_exprs.append(
-                when(substring(trim(col("code_postal")), 1, 2).isin("75", "77", "78", "91", "92", "93", "94", "95"), "Île-de-France")
-                .when(substring(trim(col("code_postal")), 1, 2).isin("44", "49", "53", "72", "85"), "Pays de la Loire")
-                .when(substring(trim(col("code_postal")), 1, 2).isin("35", "56", "22", "29"), "Bretagne")
-                .when(substring(trim(col("code_postal")), 1, 2).isin("14", "27", "50", "61", "76"), "Normandie")
-                .when(substring(trim(col("code_postal")), 1, 2).isin("02", "59", "60", "62", "80"), "Hauts-de-France")
-                .when(substring(trim(col("code_postal")), 1, 2).isin("67", "68", "88"), "Grand Est")
-                .when(substring(trim(col("code_postal")), 1, 2).isin("21", "25", "39", "58", "70", "71", "89", "90"), "Bourgogne-Franche-Comté")
-                .when(substring(trim(col("code_postal")), 1, 2).isin("03", "15", "43", "63", "69", "73", "74"), "Auvergne-Rhône-Alpes")
-                .when(substring(trim(col("code_postal")), 1, 2).isin("16", "17", "19", "23", "24", "33", "40", "47", "64", "79", "86", "87"), "Nouvelle-Aquitaine")
-                .when(substring(trim(col("code_postal")), 1, 2).isin("09", "11", "12", "30", "31", "32", "34", "46", "48", "65", "66", "81", "82"), "Occitanie")
-                .when(substring(trim(col("code_postal")), 1, 2).isin("04", "05", "06", "13", "83", "84"), "Provence-Alpes-Côte d'Azur")
-                .when(substring(trim(col("code_postal")), 1, 2).isin("20"), "Corse")
-                .when(substring(trim(col("code_postal")), 1, 2).isin("97"), "Outre-Mer")
-                .otherwise("Région inconnue").alias("region_normalisee")
-            )
-        else:
-            select_exprs.append(lit("Région inconnue").alias("region_normalisee"))
-        
-        # Metadata
-        select_exprs.extend([
-            current_timestamp().alias("silver_created_at"),
-            lit("silver_layer").alias("source_layer")
-        ])
-        
-        dim_etablissement = etablissements.select(*select_exprs).distinct()
-        
-        etablissement_count = dim_etablissement.count()
-        print(f"  ✅ Dim Établissement: {etablissement_count:,} établissements uniques")
-        dimensions["dim_etablissement"] = dim_etablissement
-        
-        # Dimension Professionnel de Santé
-        professionnels = read_bronze_table(spark, "professionnels")
-        
-        dim_professionnel = professionnels.select(
-            col("_sk_professionnel").alias("professionnel_sk"),
-            col("identifiant").alias("professionnel_nk"),
-            col("nom"),
-            col("prenom"),
-            col("civilite"),
-            col("categorie_professionnelle"),
-            col("profession"),
-            col("specialite"),
-            upper(trim(col("commune"))).alias("commune_normalisee"),
-            
-            # Catégorisation des spécialités
-            when(lower(col("specialite")).contains("generaliste"), "Médecin Généraliste")
-            .when(lower(col("specialite")).contains("chirurg"), "Chirurgien")
-            .when(lower(col("specialite")).contains("cardiologue"), "Cardiologue")
-            .when(lower(col("specialite")).contains("pediatr"), "Pédiatre")
-            .when(lower(col("specialite")).contains("gyneco"), "Gynécologue")
-            .when(lower(col("specialite")).contains("psychiatr"), "Psychiatre")
-            .when(lower(col("specialite")).contains("osteopathe"), "Ostéopathe")
-            .otherwise("Autre spécialité").alias("categorie_specialite"),
-            
-            current_timestamp().alias("silver_created_at"),
-            lit("silver_layer").alias("source_layer")
-        ).distinct()
-        
-        professionnel_count = dim_professionnel.count()
-        print(f"  ✅ Dim Professionnel: {professionnel_count:,} professionnels uniques")
-        dimensions["dim_professionnel"] = dim_professionnel
-        
-        # Dimension Diagnostic
-        diagnostics = read_bronze_table(spark, "diagnostics")
-        
-        dim_diagnostic = diagnostics.select(
-            col("_sk_diagnostic").alias("diagnostic_sk"),
-            col("code_diag").alias("diagnostic_nk"),
-            col("Diagnostic").alias("libelle_diagnostic"),
-            
-            # Catégorisation des diagnostics
-            when(col("code_diag").startswith("A"), "Maladies infectieuses")
-            .when(col("code_diag").startswith("C"), "Tumeurs")
-            .when(col("code_diag").startswith("I"), "Maladies cardiovasculaires")
-            .when(col("code_diag").startswith("J"), "Maladies respiratoires")
-            .when(col("code_diag").startswith("E"), "Maladies endocriniennes")
-            .when(col("code_diag").startswith("F"), "Troubles mentaux")
-            .when(col("code_diag").startswith("S") | col("code_diag").startswith("T"), "Traumatismes")
-            .otherwise("Autres maladies").alias("categorie_diagnostic"),
-            
-            current_timestamp().alias("silver_created_at"),
-            lit("silver_layer").alias("source_layer")
-        ).distinct()
-        
-        diagnostic_count = dim_diagnostic.count()
-        print(f"  ✅ Dim Diagnostic: {diagnostic_count:,} diagnostics uniques")
-        dimensions["dim_diagnostic"] = dim_diagnostic
-        
-        # Dimension Temps (préparation pour Gold)
-        print("  🕒 Préparation de la dimension Temps...")
-        
-        dates_df = spark.sql("""
-            SELECT explode(sequence(to_date('2010-01-01'), to_date('2024-12-31'), interval 1 day)) as date_complete
-        """)
-        
-        dim_temp = dates_df.select(
-            col("date_complete").alias("date_complete"),
-            year(col("date_complete")).alias("annee"),
-            month(col("date_complete")).alias("mois"),
-            quarter(col("date_complete")).alias("trimestre"),
-            dayofmonth(col("date_complete")).alias("jour"),
-            weekofyear(col("date_complete")).alias("semaine"),
-            date_format(col("date_complete"), "EEEE").alias("jour_semaine"),
-            dayofweek(col("date_complete")).alias("numero_jour_semaine"),
-            when(dayofweek(col("date_complete")).isin(1, 7), "Weekend")
-              .otherwise("Semaine").alias("type_jour")
-        ).distinct()
-        
-        temp_count = dim_temp.count()
-        print(f"  ✅ Dim Temps: {temp_count:,} dates préparées")
-        dimensions["dim_temp"] = dim_temp
-        
-        return dimensions
+        print(f"✅ Silver '{table_name}' écrit: {df.count()} lignes")
+        return True
         
     except Exception as e:
-        print(f"❌ Erreur lors de la création des dimensions: {e}")
-        # Nettoyer les DataFrames en cas d'erreur
-        for df in dimensions.values():
-            try:
-                df.unpersist()
-            except:
-                pass
+        print(f"❌ Erreur écriture Silver {table_name}: {e}")
         raise
 
-def create_gold_ready_facts(spark, dimensions):
-    """Crée les faits préparés pour Gold."""
-    print("\n📊 CRÉATION DES FAITS POUR GOLD")
+@log_transformation
+def create_silver_patients(bronze_patients, bronze_consultations, bronze_hospitalisations):
+    """Crée la table Silver des patients avec indicateurs d'activité."""
     
-    facts = {}
+    # Conversion des types de données problématiques
+    bronze_hospitalisations_clean = bronze_hospitalisations.withColumn(
+        "jour_hospitalisation", 
+        col("jour_hospitalisation").cast("integer")
+    )
     
-    try:
-        dim_patient = dimensions["dim_patient"]
-        dim_etablissement = dimensions["dim_etablissement"]
-        dim_professionnel = dimensions["dim_professionnel"]
-        dim_diagnostic = dimensions["dim_diagnostic"]
-        
-        # Fact Consultations avec jointure sur professionnel
-        consultations = read_bronze_table(spark, "consultations")
-        activites_pro = read_bronze_table(spark, "activites_professionnels")
-        
-        # Jointure étape par étape pour éviter les timeouts
-        fact_consultation_base = consultations.alias("c") \
-            .join(dim_patient.alias("p"), col("c.id_patient") == col("p.patient_nk"), "inner") \
-            .join(dim_diagnostic.alias("d"), col("c._sk_diagnostic") == col("d.diagnostic_sk"), "left")
-        
-        # Jointure avec activités professionnelles
-        fact_consultation_with_activites = fact_consultation_base \
-            .join(activites_pro.alias("ap"), col("c.Id_prof_sante") == col("ap.identifiant"), "left")
-        
-        # Jointure finale avec établissement
-        fact_consultation = fact_consultation_with_activites \
-            .join(dim_etablissement.alias("e"), col("ap.identifiant_organisation") == col("e.etablissement_nk"), "left") \
-            .select(
-                # Clés conformées
-                col("p.patient_sk"),
-                col("e.etablissement_sk"),
-                col("d.diagnostic_sk"),
-                col("c._sk").alias("consultation_nk"),
-                col("c.Id_prof_sante").alias("professionnel_nk"),
-                
-                # Dates - IMPORTANT: ces colonnes seront utilisées pour le partitionnement
-                to_date(coalesce(col("c.Heure_debut"), current_timestamp())).alias("date_consultation"),
-                year(coalesce(col("c.Heure_debut"), current_timestamp())).alias("annee_consultation"),
-                month(coalesce(col("c.Heure_debut"), current_timestamp())).alias("mois_consultation"),
-                quarter(coalesce(col("c.Heure_debut"), current_timestamp())).alias("trimestre_consultation"),
-                
-                # Mesures standardisées
-                lit(1).alias("nb_consultations"),
-                col("c.code_diag").alias("diagnostic_code"),
-                col("c.Motif").alias("motif_consultation"),
-                
-                # Metadata pour Gold
-                current_timestamp().alias("silver_created_at"),
-                lit("consultation_bronze").alias("source_system")
-            )
-        
-        consultation_count = fact_consultation.count()
-        print(f"  ✅ Fact Consultation: {consultation_count:,} consultations")
-        facts["fact_consultation"] = fact_consultation
-        
-        # Fact Hospitalisations - version simplifiée
-        hospitalisations = read_bronze_table(spark, "hospitalisations")
-        
-        fact_hospitalisation = hospitalisations.alias("h") \
-            .join(dim_patient.alias("p"), col("h.id_patient") == col("p.patient_nk"), "inner") \
-            .join(dim_etablissement.alias("e"), col("h.identifiant_organisation") == col("e.etablissement_nk"), "inner") \
-            .join(dim_diagnostic.alias("d"), col("h._sk_diagnostic") == col("d.diagnostic_sk"), "left") \
-            .select(
-                # Clés conformées
-                col("p.patient_sk"),
-                col("e.etablissement_sk"),
-                col("d.diagnostic_sk"),
-                col("h._sk").alias("hospitalisation_nk"),
-                
-                # Dates et durée - IMPORTANT: colonnes pour partitionnement
-                to_date(col("h.Date_Entree")).alias("date_entree"),
-                year(col("h.Date_Entree")).alias("annee_entree"),
-                month(col("h.Date_Entree")).alias("mois_entree"),
-                to_date(col("h.Date_Entree")).alias("date_sortie"),  # Approximation car pas de date_sortie
-                col("h.Jour_Hospitalisation").alias("duree_sejour"),
-                
-                # Mesures
-                lit(1).alias("nb_hospitalisations"),
-                col("h.code_diag").alias("diagnostic_principal"),
-                
-                # Metadata
-                current_timestamp().alias("silver_created_at"),
-                lit("hospitalisation_bronze").alias("source_system")
-            )
-        
-        hospitalisation_count = fact_hospitalisation.count()
-        print(f"  ✅ Fact Hospitalisation: {hospitalisation_count:,} hospitalisations")
-        facts["fact_hospitalisation"] = fact_hospitalisation
-        
-        # Fact Décès - version simplifiée
-        deces = read_bronze_table(spark, "deces")
-        
-        fact_deces = deces.select(
-            lit(None).cast(StringType()).alias("patient_sk"),
-            lit(None).cast(StringType()).alias("etablissement_sk"),
-            col("_sk").alias("deces_nk"),
-            
-            to_date(col("date_deces")).alias("date_deces"),
-            year(col("date_deces")).alias("annee_deces"),  # Pour partitionnement
-            month(col("date_deces")).alias("mois_deces"),
-            
-            (year(to_date(col("date_deces"))) - year(to_date(col("date_naissance")))).alias("age_deces"),
-            
-            lit(1).alias("nb_deces"),
-            col("sexe"),
-            
-            # Géographie pour analyse régionale
-            when(col("code_lieu_deces").isNotNull(), 
-                 substring(col("code_lieu_deces"), 1, 2)).alias("departement_deces"),
-            
-            current_timestamp().alias("silver_created_at")
+    # Activité des patients (consultations) - Utilisation des clés _sk avec alias
+    consultations_activity = bronze_consultations \
+        .filter(col("date_consultation").isNotNull()) \
+        .groupBy("_sk_patient") \
+        .agg(
+            count("*").alias("nb_consultations_total"),
+            countDistinct("code_diag").alias("nb_diagnostics_distincts"),
+            min("date_consultation").alias("date_premiere_consultation"),
+            max("date_consultation").alias("date_derniere_consultation"),
+            avg(year("date_consultation")).alias("annee_moyenne_consultations")
+        ).alias("consult_act")
+    
+    # Hospitalisations des patients - Utilisation des clés _sk avec alias
+    hospitalisations_activity = bronze_hospitalisations_clean \
+        .filter(col("date_admission").isNotNull()) \
+        .groupBy("_sk_patient") \
+        .agg(
+            count("*").alias("nb_hospitalisations_total"),
+            spark_sum("jour_hospitalisation").alias("total_jours_hospitalisation"),
+            avg("jour_hospitalisation").alias("duree_moyenne_sejour"),
+            min("date_admission").alias("date_premiere_hospitalisation"),
+            max("date_admission").alias("date_derniere_hospitalisation")
+        ).alias("hosp_act")
+    
+    # Table Silver patients enrichie avec jointures sur _sk et sélection explicite
+    silver_patients = bronze_patients.alias("p") \
+        .join(consultations_activity, col("p._sk_patient") == col("consult_act._sk_patient"), "left") \
+        .join(hospitalisations_activity, col("p._sk_patient") == col("hosp_act._sk_patient"), "left") \
+        .select(
+            col("p.*"),  # Toutes les colonnes de base des patients
+            col("consult_act.nb_consultations_total"),
+            col("consult_act.nb_diagnostics_distincts"),
+            col("consult_act.date_premiere_consultation"),
+            col("consult_act.date_derniere_consultation"),
+            col("consult_act.annee_moyenne_consultations"),
+            col("hosp_act.nb_hospitalisations_total"),
+            col("hosp_act.total_jours_hospitalisation"),
+            col("hosp_act.duree_moyenne_sejour"),
+            col("hosp_act.date_premiere_hospitalisation"),
+            col("hosp_act.date_derniere_hospitalisation")
+        ) \
+        .withColumn("statut_activite",
+            when(col("nb_consultations_total").isNull(), "Inactif")
+            .when(col("nb_consultations_total") <= 2, "Occasionnel")
+            .when(col("nb_consultations_total") <= 10, "Regulier")
+            .otherwise("Frequents")
+        ) \
+        .withColumn("patient_hospitalise", 
+            when(col("nb_hospitalisations_total").isNotNull(), True).otherwise(False)
+        ) \
+        .withColumn("segment_patient",
+            when((col("age") < 18) & (col("nb_consultations_total") > 5), "Jeune_Frequent")
+            .when((col("age") >= 65) & (col("nb_hospitalisations_total") > 0), "Senior_Hospitalise")
+            .when(col("statut_activite") == "Frequents", "Patient_Chronique")
+            .otherwise("Standard")
+        ) \
+        .fillna({
+            "nb_consultations_total": 0,
+            "nb_diagnostics_distincts": 0,
+            "nb_hospitalisations_total": 0,
+            "total_jours_hospitalisation": 0,
+            "duree_moyenne_sejour": 0
+        })
+    
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_patients, "silver_patients")
+    
+    return silver_patients
+
+@log_transformation
+def create_silver_consultations(bronze_consultations, bronze_patients, bronze_diagnostics, bronze_professionnels, bronze_etablissements):
+    """Crée la table Silver des consultations enrichie avec lien établissement."""
+    
+    # Conversion des types de données pour les heures
+    bronze_consultations_clean = bronze_consultations \
+        .withColumn("heure_debut_timestamp", col("heure_debut").cast("timestamp")) \
+        .withColumn("heure_fin_timestamp", col("heure_fin").cast("timestamp")) \
+        .alias("c")
+    
+    # Extraction de la région à partir du code postal (2 premiers chiffres)
+    patients_clean = bronze_patients.withColumn(
+        "region_code", 
+        when(col("code_postal").isNotNull(), 
+             regexp_extract(col("code_postal"), r"^(\d{2})", 1))
+        .otherwise("00")
+    ).withColumn(
+        "patient_region",
+        when(col("region_code").isin(["75", "77", "78", "91", "92", "93", "94", "95"]), "Ile-de-France")
+        .when(col("region_code").isin(["14", "27", "50", "61", "76"]), "Normandie")
+        .when(col("region_code").isin(["02", "59", "60", "62", "80"]), "Hauts-de-France")
+        .when(col("region_code").isin(["35", "22", "56", "29"]), "Bretagne")
+        .when(col("region_code").isin(["44", "49", "53", "72", "85"]), "Pays de la Loire")
+        .when(col("region_code").isin(["17", "16", "79", "86", "87"]), "Nouvelle-Aquitaine")
+        .when(col("region_code").isin(["33", "24", "40", "47", "64"]), "Nouvelle-Aquitaine")
+        .when(col("region_code").isin(["31", "09", "11", "12", "32", "34", "46", "48", "65", "66", "81", "82"]), "Occitanie")
+        .when(col("region_code").isin(["69", "42", "43", "63", "03", "15", "07", "26", "38", "73", "74"]), "Auvergne-Rhône-Alpes")
+        .when(col("region_code").isin(["21", "25", "39", "58", "70", "71", "89", "90"]), "Bourgogne-Franche-Comté")
+        .when(col("region_code").isin(["54", "55", "57", "88"]), "Grand Est")
+        .when(col("region_code").isin(["51", "08", "10", "52"]), "Grand Est")
+        .when(col("region_code").isin(["18", "28", "36", "37", "41", "45"]), "Centre-Val de Loire")
+        .when(col("region_code").isin(["97"]), "Outre-Mer")
+        .otherwise("Autre")
+    ).select(
+        "_sk_patient", 
+        col("sexe").alias("patient_sexe"),
+        "age", 
+        "categorie_age", 
+        "patient_region"
+    ).alias("p")
+    
+    # Préparer les diagnostics
+    diagnostics_clean = bronze_diagnostics.select(
+        "_sk", 
+        "code_diag", 
+        "diagnostic"
+    ).withColumn(
+        "type_pathologie",
+        when(col("diagnostic").contains("chronique"), "Chronique")
+        .when(col("diagnostic").contains("aigu"), "Aigu")
+        .when(col("diagnostic").contains("prevention"), "Prevention")
+        .otherwise("Standard")
+    ).alias("d")
+    
+    # Préparer les professionnels
+    professionnels_clean = bronze_professionnels.select(
+        "_sk", 
+        "identifiant", 
+        "profession", 
+        "categorie_professionnelle"
+    ).alias("prof")
+    
+    # ✅ AJOUT : Lien établissement via région (solution temporaire)
+    etablissement_par_region = bronze_etablissements \
+        .groupBy("region") \
+        .agg(
+            first("finess_site").alias("finess_principal"),
+            first("raison_sociale_site").alias("raison_sociale_principal")
+        ).alias("etab")
+    
+    # Construction de la table silver avec des sélections explicites et jointures sur _sk
+    silver_consultations = bronze_consultations_clean \
+        .join(patients_clean, col("c._sk_patient") == col("p._sk_patient"), "left") \
+        .join(diagnostics_clean, col("c._sk_diagnostic") == col("d._sk"), "left") \
+        .join(professionnels_clean, 
+              col("c.id_prof_sante") == col("prof.identifiant"), "left") \
+        .join(etablissement_par_region,
+              col("p.patient_region") == col("etab.region"), "left") \
+        .select(
+            col("c.*"),
+            col("p.patient_sexe"),
+            col("p.age"),
+            col("p.categorie_age"),
+            col("p.patient_region"),
+            col("d.type_pathologie"),
+            col("prof.profession"),
+            col("prof.categorie_professionnelle"),
+            # ✅ AJOUT DES COLONNES ÉTABLISSEMENT
+            col("etab.finess_principal").alias("consultation_etablissement_finess"),
+            col("etab.raison_sociale_principal").alias("consultation_etablissement_nom")
+        ) \
+        .withColumn("duree_consultation_heures",
+            (col("heure_fin_timestamp").cast("long") - col("heure_debut_timestamp").cast("long")) / 3600.0
+        ) \
+        .withColumn("consultation_longue",
+            when(col("duree_consultation_heures") > 1, True).otherwise(False)
+        ) \
+        .withColumn("saison_consultation",
+            when(month(col("date_consultation")).isin([12, 1, 2]), "Hiver")
+            .when(month(col("date_consultation")).isin([3, 4, 5]), "Printemps")
+            .when(month(col("date_consultation")).isin([6, 7, 8]), "Ete")
+            .otherwise("Automne")
+        ) \
+        .withColumn("periode_journee",
+            when(hour(col("heure_debut_timestamp")) < 12, "Matin")
+            .when(hour(col("heure_debut_timestamp")) < 18, "Apres-midi")
+            .otherwise("Soir")
+        ) \
+        .withColumn("region", col("patient_region")) \
+        .withColumn("sexe", col("patient_sexe")) \
+        .withColumn("date_consultation_annee", year(col("date_consultation"))) \
+        .withColumn("date_consultation_mois", month(col("date_consultation"))) \
+        .filter(col("date_consultation").isNotNull())
+    
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_consultations, "silver_consultations")
+    
+    return silver_consultations
+
+@log_transformation
+def create_silver_hospitalisations(bronze_hospitalisations, bronze_patients, bronze_diagnostics, bronze_etablissements):
+    """Crée la table Silver des hospitalisations enrichie."""
+    
+    # Conversion des types de données
+    bronze_hospitalisations_clean = bronze_hospitalisations \
+        .withColumn("jour_hospitalisation", col("jour_hospitalisation").cast("integer")) \
+        .alias("h")
+    
+    # Extraction de la région à partir du code postal (2 premiers chiffres)
+    patients_clean = bronze_patients.withColumn(
+        "region_code", 
+        when(col("code_postal").isNotNull(), 
+             regexp_extract(col("code_postal"), r"^(\d{2})", 1))
+        .otherwise("00")
+    ).withColumn(
+        "patient_region",
+        when(col("region_code").isin(["75", "77", "78", "91", "92", "93", "94", "95"]), "Ile-de-France")
+        .when(col("region_code").isin(["14", "27", "50", "61", "76"]), "Normandie")
+        .when(col("region_code").isin(["02", "59", "60", "62", "80"]), "Hauts-de-France")
+        .when(col("region_code").isin(["35", "22", "56", "29"]), "Bretagne")
+        .when(col("region_code").isin(["44", "49", "53", "72", "85"]), "Pays de la Loire")
+        .when(col("region_code").isin(["17", "16", "79", "86", "87"]), "Nouvelle-Aquitaine")
+        .when(col("region_code").isin(["33", "24", "40", "47", "64"]), "Nouvelle-Aquitaine")
+        .when(col("region_code").isin(["31", "09", "11", "12", "32", "34", "46", "48", "65", "66", "81", "82"]), "Occitanie")
+        .when(col("region_code").isin(["69", "42", "43", "63", "03", "15", "07", "26", "38", "73", "74"]), "Auvergne-Rhône-Alpes")
+        .when(col("region_code").isin(["21", "25", "39", "58", "70", "71", "89", "90"]), "Bourgogne-Franche-Comté")
+        .when(col("region_code").isin(["54", "55", "57", "88"]), "Grand Est")
+        .when(col("region_code").isin(["51", "08", "10", "52"]), "Grand Est")
+        .when(col("region_code").isin(["18", "28", "36", "37", "41", "45"]), "Centre-Val de Loire")
+        .when(col("region_code").isin(["97"]), "Outre-Mer")
+        .otherwise("Autre")
+    ).select(
+        "_sk_patient", 
+        col("sexe").alias("patient_sexe"),
+        "age", 
+        "categorie_age", 
+        "patient_region"
+    ).alias("p")
+    
+    # Préparer les données des établissements
+    etablissements_clean = bronze_etablissements.select(
+        "_sk",
+        "finess_site", 
+        "raison_sociale_site", 
+        col("region").alias("etablissement_region"), 
+        "code_postal"
+    ).alias("e")
+    
+    # Préparer les diagnostics
+    diagnostics_clean = bronze_diagnostics.select(
+        "_sk",
+        "code_diag", 
+        "diagnostic"
+    ).withColumn(
+        "type_hospitalisation",
+        when(col("diagnostic").rlike("(?i)urgence|aigu|trauma"), "Urgence")
+        .when(col("diagnostic").rlike("(?i)chronique|long"), "Chronique")
+        .when(col("diagnostic").rlike("(?i)prevention|depistage"), "Prevention")
+        .when(col("diagnostic").rlike("(?i)chirurgie|operation"), "Chirurgical")
+        .otherwise("Medical")
+    ).alias("d")
+    
+    # Construction de la table silver avec des sélections explicites et jointures sur _sk
+    silver_hospitalisations = bronze_hospitalisations_clean \
+        .join(patients_clean, col("h._sk_patient") == col("p._sk_patient"), "left") \
+        .join(diagnostics_clean, col("h._sk_diagnostic") == col("d._sk"), "left") \
+        .join(etablissements_clean, 
+              col("h._sk_etablissement") == col("e._sk"), "left") \
+        .select(
+            col("h.*"),
+            col("p.patient_sexe"),
+            col("p.age"),
+            col("p.categorie_age"),
+            col("p.patient_region"),
+            col("d.type_hospitalisation"),
+            col("e.raison_sociale_site"),
+            col("e.etablissement_region"),
+            col("e.code_postal")
+        ) \
+        .withColumn("gravite_sejour",
+            when(col("jour_hospitalisation") > 30, "Long")
+            .when(col("jour_hospitalisation") > 7, "Moyen")
+            .otherwise("Court")
+        ) \
+        .withColumn("saison_hospitalisation",
+            when(month(col("date_admission")).isin([12, 1, 2]), "Hiver")
+            .when(month(col("date_admission")).isin([3, 4, 5]), "Printemps")
+            .when(month(col("date_admission")).isin([6, 7, 8]), "Ete")
+            .otherwise("Automne")
+        ) \
+        .withColumn("readmission_risque",
+            when((col("age") > 65) & (col("jour_hospitalisation") > 10), "Eleve")
+            .when(col("type_hospitalisation") == "Chronique", "Modere")
+            .otherwise("Faible")
+        ) \
+        .withColumn("region", col("patient_region")) \
+        .withColumn("sexe", col("patient_sexe")) \
+        .withColumn("date_admission_annee", year(col("date_admission"))) \
+        .withColumn("date_admission_mois", month(col("date_admission"))) \
+        .filter(col("date_admission").isNotNull())
+    
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_hospitalisations, "silver_hospitalisations")
+    
+    return silver_hospitalisations
+
+@log_transformation
+def create_silver_deces(bronze_deces):
+    """Crée la table Silver des décès enrichie."""
+    
+    # Calcul de l'âge à partir de la date de naissance et de la date de décès
+    bronze_deces_with_age = bronze_deces \
+        .withColumn("age", 
+                   floor(datediff(col("date_deces"), col("date_naissance")) / 365.25)
+        ) \
+        .withColumn("categorie_age",
+            when(col("age") < 18, "0-17")
+            .when(col("age") < 30, "18-29")
+            .when(col("age") < 45, "30-44")
+            .when(col("age") < 60, "45-59")
+            .when(col("age") < 75, "60-74")
+            .otherwise("75+")
         )
-        
-        deces_count = fact_deces.count()
-        print(f"  ✅ Fact Décès: {deces_count:,} décès")
-        facts["fact_deces"] = fact_deces
-        
-        # Fact Satisfaction (optionnel - seulement si les données existent)
-        try:
-            satisfaction_2019 = read_bronze_table(spark, "satisfaction_48h_2019")
-            
-            fact_satisfaction = satisfaction_2019.select(
-                col("_sk_etablissement").alias("etablissement_sk"),
-                col("identifiant_organisation").alias("etablissement_nk"),
-                col("region"),
-                lit(2019).alias("annee_enquete"),
-                col("participation"),
-                col("nb_rep_score_all_rea_ajust").alias("nb_repondants"),
-                regexp_replace(col("score_all_rea_ajust"), ",", ".").cast("double").alias("score_satisfaction_global"),
-                regexp_replace(col("score_accueil_rea_ajust"), ",", ".").cast("double").alias("score_accueil"),
-                regexp_replace(col("score_PECinf_rea_ajust"), ",", ".").cast("double").alias("score_soins_infirmiers"),
-                regexp_replace(col("score_PECmed_rea_ajust"), ",", ".").cast("double").alias("score_soins_medicaux"),
-                current_timestamp().alias("silver_created_at")
-            )
-            
-            satisfaction_count = fact_satisfaction.count()
-            print(f"  ✅ Fact Satisfaction: {satisfaction_count:,} enregistrements")
-            facts["fact_satisfaction"] = fact_satisfaction
-            
-        except Exception as sat_error:
-            print(f"  ⚠️  Impossible de créer le fait Satisfaction: {sat_error}")
-            # Créer un fait satisfaction vide
-            fact_satisfaction = spark.createDataFrame([], StructType([
-                StructField("etablissement_sk", StringType(), True),
-                StructField("etablissement_nk", StringType(), True),
-                StructField("region", StringType(), True),
-                StructField("annee_enquete", IntegerType(), True),
-                StructField("participation", StringType(), True),
-                StructField("nb_repondants", IntegerType(), True),
-                StructField("score_satisfaction_global", DoubleType(), True),
-                StructField("score_accueil", DoubleType(), True),
-                StructField("score_soins_infirmiers", DoubleType(), True),
-                StructField("score_soins_medicaux", DoubleType(), True),
-                StructField("silver_created_at", TimestampType(), True)
-            ]))
-            facts["fact_satisfaction"] = fact_satisfaction
-        
-        return facts
-        
-    except Exception as e:
-        print(f"❌ Erreur lors de la création des faits: {e}")
-        # Nettoyer les DataFrames en cas d'erreur
-        for df in facts.values():
-            try:
-                df.unpersist()
-            except:
-                pass
-        raise
-
-def create_business_marts(spark, dimensions, facts):
-    """Crée les marts business pour répondre aux besoins Gold."""
-    print("\n📈 CRÉATION DES MARTS BUSINESS")
     
-    marts = {}
+    silver_deces = bronze_deces_with_age \
+        .withColumn("esperance_vie_atteinte",
+            when(col("age") >= 80, "Longevite")
+            .when(col("age") >= 65, "Retraite")
+            .when(col("age") >= 18, "Adulte")
+            .otherwise("Premature")
+        ) \
+        .withColumn("saison_deces",
+            when(month(col("date_deces")).isin([12, 1, 2]), "Hiver")
+            .when(month(col("date_deces")).isin([3, 4, 5]), "Printemps")
+            .when(month(col("date_deces")).isin([6, 7, 8]), "Ete")
+            .otherwise("Automne")
+        ) \
+        .withColumn("region_deces", col("region")) \
+        .withColumn("departement_deces", col("departement")) \
+        .withColumn("tranche_age_deces",
+            when(col("age") < 1, "0-1 an")
+            .when(col("age") < 18, "1-17 ans")
+            .when(col("age") < 30, "18-29 ans")
+            .when(col("age") < 45, "30-44 ans")
+            .when(col("age") < 60, "45-59 ans")
+            .when(col("age") < 75, "60-74 ans")
+            .otherwise("75+ ans")
+        ) \
+        .withColumn("date_deces_annee", year(col("date_deces"))) \
+        .withColumn("date_deces_mois", month(col("date_deces")))
     
-    try:
-        fact_consultation = facts["fact_consultation"]
-        fact_hospitalisation = facts["fact_hospitalisation"]
-        fact_deces = facts["fact_deces"]
-        fact_satisfaction = facts["fact_satisfaction"]
-        dim_patient = dimensions["dim_patient"]
-        dim_etablissement = dimensions["dim_etablissement"]
-        dim_diagnostic = dimensions["dim_diagnostic"]
-        dim_professionnel = dimensions["dim_professionnel"]
-        
-        # Mart 1: Taux de consultation des patients dans un établissement X sur une période de temps Y
-        print("  🏥 Création du mart consultation établissement...")
-        mart_taux_consultation_etablissement = fact_consultation.alias("fc") \
-            .join(dim_etablissement.alias("e"), "etablissement_sk") \
-            .groupBy("e.etablissement_nk", "e.nom_etablissement", "e.region_normalisee", 
-                    "fc.annee_consultation", "fc.mois_consultation") \
-            .agg(
-                count("fc.consultation_nk").alias("nb_consultations"),
-                countDistinct("fc.patient_sk").alias("nb_patients_uniques"),
-                (count("fc.consultation_nk") / countDistinct("fc.patient_sk")).alias("taux_consultation_patient")
-            )
-        
-        marts["mart_taux_consultation_etablissement"] = mart_taux_consultation_etablissement
-        print("  ✅ Mart Taux Consultation Établissement créé")
-        
-        # Mart 2: Taux de consultation des patients par rapport à un diagnostic X sur une période de temps Y
-        print("  🩺 Création du mart consultation diagnostic...")
-        mart_taux_consultation_diagnostic = fact_consultation.alias("fc") \
-            .join(dim_diagnostic.alias("d"), "diagnostic_sk") \
-            .groupBy("d.diagnostic_nk", "d.libelle_diagnostic", "d.categorie_diagnostic",
-                    "fc.annee_consultation", "fc.mois_consultation") \
-            .agg(
-                count("fc.consultation_nk").alias("nb_consultations"),
-                countDistinct("fc.patient_sk").alias("nb_patients_uniques"),
-                (count("fc.consultation_nk") / countDistinct("fc.patient_sk")).alias("taux_consultation_diagnostic")
-            )
-        
-        marts["mart_taux_consultation_diagnostic"] = mart_taux_consultation_diagnostic
-        print("  ✅ Mart Taux Consultation Diagnostic créé")
-        
-        # Mart 3: Taux global d'hospitalisation des patients dans une période donnée Y
-        print("  🏨 Création du mart hospitalisation global...")
-        mart_taux_hospitalisation_global = fact_hospitalisation.alias("fh") \
-            .groupBy("fh.annee_entree", "fh.mois_entree") \
-            .agg(
-                count("fh.hospitalisation_nk").alias("nb_hospitalisations"),
-                countDistinct("fh.patient_sk").alias("nb_patients_uniques"),
-                (count("fh.hospitalisation_nk") / countDistinct("fh.patient_sk")).alias("taux_hospitalisation_global")
-            )
-        
-        marts["mart_taux_hospitalisation_global"] = mart_taux_hospitalisation_global
-        print("  ✅ Mart Taux Hospitalisation Global créé")
-        
-        # Mart 4: Taux d'hospitalisation des patients par rapport à des diagnostics sur une période donnée
-        print("  💊 Création du mart hospitalisation diagnostic...")
-        mart_taux_hospitalisation_diagnostic = fact_hospitalisation.alias("fh") \
-            .join(dim_diagnostic.alias("d"), "diagnostic_sk") \
-            .groupBy("d.diagnostic_nk", "d.libelle_diagnostic", "d.categorie_diagnostic",
-                    "fh.annee_entree", "fh.mois_entree") \
-            .agg(
-                count("fh.hospitalisation_nk").alias("nb_hospitalisations"),
-                countDistinct("fh.patient_sk").alias("nb_patients_uniques"),
-                avg("fh.duree_sejour").alias("duree_sejour_moyenne"),
-                (count("fh.hospitalisation_nk") / countDistinct("fh.patient_sk")).alias("taux_hospitalisation_diagnostic")
-            )
-        
-        marts["mart_taux_hospitalisation_diagnostic"] = mart_taux_hospitalisation_diagnostic
-        print("  ✅ Mart Taux Hospitalisation Diagnostic créé")
-        
-        # Mart 5: Taux d'hospitalisation par sexe, par âge
-        print("  👥 Création du mart hospitalisation démographie...")
-        mart_taux_hospitalisation_demographie = fact_hospitalisation.alias("fh") \
-            .join(dim_patient.alias("p"), "patient_sk") \
-            .groupBy("p.sexe", "p.tranche_age", "fh.annee_entree") \
-            .agg(
-                count("fh.hospitalisation_nk").alias("nb_hospitalisations"),
-                countDistinct("fh.patient_sk").alias("nb_patients_uniques"),
-                avg("fh.duree_sejour").alias("duree_sejour_moyenne"),
-                (count("fh.hospitalisation_nk") / countDistinct("fh.patient_sk")).alias("taux_hospitalisation_demographique")
-            )
-        
-        marts["mart_taux_hospitalisation_demographie"] = mart_taux_hospitalisation_demographie
-        print("  ✅ Mart Taux Hospitalisation Démographie créé")
-        
-        # Mart 6: Taux de consultation par professionnel
-        print("  👨‍⚕️ Création du mart consultation professionnel...")
-        mart_taux_consultation_professionnel = fact_consultation.alias("fc") \
-            .join(dim_professionnel.alias("p"), col("fc.professionnel_nk") == col("p.professionnel_nk"), "left") \
-            .groupBy("p.professionnel_nk", "p.nom", "p.prenom", "p.profession", "p.categorie_specialite",
-                    "fc.annee_consultation", "fc.mois_consultation") \
-            .agg(
-                count("fc.consultation_nk").alias("nb_consultations"),
-                countDistinct("fc.patient_sk").alias("nb_patients_uniques"),
-                (count("fc.consultation_nk") / countDistinct("fc.patient_sk")).alias("taux_consultation_professionnel")
-            )
-        
-        marts["mart_taux_consultation_professionnel"] = mart_taux_consultation_professionnel
-        print("  ✅ Mart Taux Consultation Professionnel créé")
-        
-        # Mart 7: Nombre de décès par localisation (région) et sur l'année 2019
-        print("  📊 Création du mart décès localisation...")
-        mart_deces_localisation = fact_deces.alias("fd") \
-            .filter(col("annee_deces") == 2019) \
-            .groupBy("fd.departement_deces", "fd.annee_deces") \
-            .agg(
-                count("fd.deces_nk").alias("nb_deces"),
-                countDistinct("fd.sexe").alias("nb_sexes_distincts"),
-                avg("fd.age_deces").alias("age_moyen_deces")
-            ).join(
-                dim_etablissement.select("departement_code", "region_normalisee").distinct(),
-                col("fd.departement_deces") == col("departement_code"),
-                "left"
-            ).groupBy("region_normalisee", "fd.annee_deces") \
-            .agg(
-                sum("nb_deces").alias("nb_deces_region"),
-                avg("age_moyen_deces").alias("age_moyen_deces_region")
-            )
-        
-        marts["mart_deces_localisation"] = mart_deces_localisation
-        print("  ✅ Mart Décès Localisation créé")
-        
-        # Mart 8: Taux global de satisfaction par région sur l'année 2020
-        print("  ⭐ Création du mart satisfaction région...")
-        # Note: Utilisation des données 2019 comme proxy pour 2020
-        mart_satisfaction_region = fact_satisfaction.alias("fs") \
-            .filter(col("annee_enquete") == 2019) \
-            .groupBy("fs.region", "fs.annee_enquete") \
-            .agg(
-                avg("fs.score_satisfaction_global").alias("score_satisfaction_moyen_region"),
-                avg("fs.score_accueil").alias("score_accueil_moyen_region"),
-                avg("fs.score_soins_infirmiers").alias("score_soins_infirmiers_moyen_region"),
-                sum("fs.nb_repondants").alias("total_repondants_region"),
-                count("fs.etablissement_sk").alias("nb_etablissements_enquetes")
-            )
-        
-        marts["mart_satisfaction_region"] = mart_satisfaction_region
-        print("  ✅ Mart Satisfaction Région créé")
-        
-        return marts
-        
-    except Exception as e:
-        print(f"❌ Erreur lors de la création des marts: {e}")
-        # Nettoyer les DataFrames en cas d'erreur
-        for df in marts.values():
-            try:
-                df.unpersist()
-            except:
-                pass
-        raise
-
-def write_silver_for_gold(spark, tables):
-    """Écrit les tables Silver optimisées pour Gold avec partitionnement."""
-    print("\n💾 ÉCRITURE DES DONNÉES SILVER POUR GOLD AVEC PARTITIONNEMENT")
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_deces, "silver_deces")
     
-    for table_name, df in tables.items():
-        try:
-            silver_path = f"s3a://{MINIO_CONFIG['bucket_silver']}/{table_name}"
-            
-            # Vérifier si cette table doit être partitionnée
-            partition_columns = PARTITIONING_CONFIG.get(table_name)
-            
-            if partition_columns:
-                # Vérifier que les colonnes de partitionnement existent
-                missing_columns = [col for col in partition_columns if col not in df.columns]
-                if missing_columns:
-                    print(f"  ⚠️  Colonnes de partitionnement manquantes pour {table_name}: {missing_columns}")
-                    print(f"     Écriture sans partitionnement")
-                    # Écriture sans partitionnement
-                    df.write \
-                        .mode("overwrite") \
-                        .option("compression", "snappy") \
-                        .parquet(silver_path)
-                else:
-                    # ÉCRITURE AVEC PARTITIONNEMENT
-                    print(f"  🗂️  Écriture partitionnée de {table_name} par {partition_columns}")
-                    df.write \
-                        .mode("overwrite") \
-                        .option("compression", "snappy") \
-                        .partitionBy(*partition_columns) \
-                        .parquet(silver_path)
-            else:
-                # Écriture sans partitionnement pour les tables non configurées
-                df.write \
-                    .mode("overwrite") \
-                    .option("compression", "snappy") \
-                    .parquet(silver_path)
-            
-            # Compter les lignes avec gestion d'erreur
-            try:
-                row_count = df.count()
-                print(f"  ✅ {table_name}: {row_count:,} lignes écrites")
-                print(f"     📊 Schema: {len(df.columns)} colonnes")
-            except Exception as count_error:
-                print(f"  ✅ {table_name}: écriture terminée (comptage échoué: {count_error})")
-                print(f"     📊 Schema: {len(df.columns)} colonnes")
-            
-        except Exception as e:
-            print(f"  ❌ Erreur écriture {table_name}: {e}")
+    return silver_deces
 
-def generate_gold_readiness_report(tables, marts):
-    """Génère un rapport de préparation pour Gold."""
-    print("\n" + "="*80)
-    print("📋 RAPPORT DE PRÉPARATION POUR GOLD LAYER")
-    print("="*80)
+@log_transformation
+def create_silver_etablissements(bronze_etablissements, bronze_hospitalisations, bronze_satisfaction):
+    """Crée la table Silver des établissements avec indicateurs de performance."""
     
-    total_tables = len(tables)
-    total_marts = len(marts)
+    # Conversion des types de données
+    bronze_hospitalisations_clean = bronze_hospitalisations \
+        .withColumn("jour_hospitalisation", col("jour_hospitalisation").cast("integer"))
     
-    print(f"""
-🎯 ÉTAT DE PRÉPARATION SILVER → GOLD:
+    # ✅ CORRECTION : Agréger par établissement via hospitalisations
+    hospitalisations_par_etablissement = bronze_hospitalisations_clean \
+        .groupBy("identifiant_organisation") \
+        .agg(
+            count("*").alias("nb_hospitalisations_total"),
+            countDistinct("id_patient").alias("nb_patients_hospitalises"),
+            avg("jour_hospitalisation").alias("duree_moyenne_sejour"),
+            spark_sum("jour_hospitalisation").alias("total_jours_hospitalisation")
+        ) \
+        .withColumnRenamed("identifiant_organisation", "finess_hospit").alias("hosp_stats")
+    
+    # Satisfaction par établissement
+    satisfaction_par_etablissement = bronze_satisfaction \
+        .groupBy("finess") \
+        .agg(
+            avg("score_all_ajust").alias("score_satisfaction_moyen"),
+            avg("taux_reco_brut").alias("taux_recommandation_moyen"),
+            count("*").alias("nb_campagnes_satisfaction")
+        ) \
+        .withColumnRenamed("finess", "finess_satisf").alias("sat_stats")
+    
+    # Construction finale avec vraies statistiques
+    silver_etablissements = bronze_etablissements.alias("etab") \
+        .join(hospitalisations_par_etablissement,
+              col("etab.finess_site") == col("hosp_stats.finess_hospit"),
+              "left") \
+        .join(satisfaction_par_etablissement,
+              col("etab.finess_site") == col("sat_stats.finess_satisf"),
+              "left") \
+        .select(
+            col("etab.*"),
+            col("hosp_stats.nb_hospitalisations_total"),
+            col("hosp_stats.nb_patients_hospitalises"),
+            col("hosp_stats.duree_moyenne_sejour"),
+            col("hosp_stats.total_jours_hospitalisation"),
+            col("sat_stats.score_satisfaction_moyen"),
+            col("sat_stats.taux_recommandation_moyen"),
+            col("sat_stats.nb_campagnes_satisfaction")
+        ) \
+        .withColumn("niveau_activite",
+            when(col("nb_hospitalisations_total") > 100, "Tres_actif")
+            .when(col("nb_hospitalisations_total") > 50, "Actif")
+            .when(col("nb_hospitalisations_total") > 10, "Modere")
+            .otherwise("Faible")
+        ) \
+        .withColumn("specialisation_etablissement",
+            when(col("nb_hospitalisations_total").isNull(), "Consultation_seule")
+            .otherwise("Hospitalisation")
+        ) \
+        .withColumn("performance_globale",
+            when((col("score_satisfaction_moyen") > 80) & (col("duree_moyenne_sejour") < 10), "Excellente")
+            .when((col("score_satisfaction_moyen") > 70) & (col("duree_moyenne_sejour") < 15), "Bonne")
+            .when(col("score_satisfaction_moyen") > 60, "Satisfaisante")
+            .otherwise("A_ameliorer")
+        ) \
+        .fillna({
+            "nb_hospitalisations_total": 0,
+            "nb_patients_hospitalises": 0,
+            "duree_moyenne_sejour": 0,
+            "total_jours_hospitalisation": 0,
+            "score_satisfaction_moyen": 0,
+            "taux_recommandation_moyen": 0,
+            "nb_campagnes_satisfaction": 0
+        })
+    
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_etablissements, "silver_etablissements")
+    
+    return silver_etablissements
 
-📊 VOLUME DE DONNÉES:
-├── Tables Silver créées: {total_tables} (Dimensions + Faits)
-├── Marts Business créés: {total_marts}
-└── Structure prête pour l'agrégation Gold
+@log_transformation
+def create_silver_professionnels(bronze_professionnels, bronze_consultations):
+    """Crée la table Silver des professionnels de santé avec indicateurs d'activité."""
+    
+    activite_professionnels = bronze_consultations \
+        .groupBy("id_prof_sante") \
+        .agg(
+            count("*").alias("nb_consultations_total"),
+            countDistinct("id_patient").alias("nb_patients_uniques"),
+            countDistinct("code_diag").alias("nb_diagnostics_distincts"),
+            avg(year("date_consultation")).alias("annee_moyenne_activite"),
+            min("date_consultation").alias("date_premiere_consultation"),
+            max("date_consultation").alias("date_derniere_consultation")
+        ).alias("act")
+    
+    silver_professionnels = bronze_professionnels.alias("prof") \
+        .join(activite_professionnels, 
+              col("prof.identifiant") == col("act.id_prof_sante"), "left") \
+        .select(
+            col("prof.*"),
+            col("act.nb_consultations_total"),
+            col("act.nb_patients_uniques"),
+            col("act.nb_diagnostics_distincts"),
+            col("act.annee_moyenne_activite"),
+            col("act.date_premiere_consultation"),
+            col("act.date_derniere_consultation")
+        ) \
+        .withColumn("niveau_activite",
+            when(col("nb_consultations_total") > 1000, "Tres_actif")
+            .when(col("nb_consultations_total") > 100, "Actif")
+            .when(col("nb_consultations_total") > 10, "Occasionnel")
+            .otherwise("Inactif")
+        ) \
+        .withColumn("experience_approximative",
+            when(col("date_premiere_consultation").isNotNull(), 
+                 year(current_date()) - year(col("date_premiere_consultation")))
+            .otherwise(0)
+        ) \
+        .withColumn("productivite_moyenne",
+            when(col("nb_patients_uniques") > 0, 
+                 col("nb_consultations_total") / col("nb_patients_uniques"))
+            .otherwise(0)
+        ) \
+        .withColumn("specialisation_cas",
+            when(col("nb_consultations_total") > 0,
+                 when(col("nb_diagnostics_distincts") / col("nb_consultations_total") < 0.1, "Specialiste")
+                 .when(col("nb_diagnostics_distincts") / col("nb_consultations_total") > 0.5, "Generaliste")
+                 .otherwise("Polyvalent")
+            ).otherwise("Inconnu")
+        ) \
+        .fillna({
+            "nb_consultations_total": 0,
+            "nb_patients_uniques": 0,
+            "nb_diagnostics_distincts": 0,
+            "annee_moyenne_activite": 0,
+            "productivite_moyenne": 0
+        })
+    
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_professionnels, "silver_professionnels")
+    
+    return silver_professionnels
 
-🏗️  STRUCTURE POUR GOLD:
-✅ Dimensions conformées (Patient, Établissement, Professionnel, Diagnostic, Temps)
-✅ Faits normalisés avec clés naturelles
-✅ Marts business pré-calculés pour les KPI
-✅ Schémas optimisés pour l'agrégation
-✅ Métadonnées de traçabilité
-✅ PARTITIONNEMENT POUR PERFORMANCE
+@log_transformation
+def create_silver_diagnostics(bronze_diagnostics, bronze_consultations, bronze_hospitalisations):
+    """Crée la table Silver des diagnostics avec indicateurs de prévalence."""
+    
+    # Conversion des types de données
+    bronze_hospitalisations_clean = bronze_hospitalisations \
+        .withColumn("jour_hospitalisation", col("jour_hospitalisation").cast("integer"))
+    
+    # Prévalence dans les consultations
+    prevalence_consultations = bronze_consultations \
+        .groupBy("code_diag") \
+        .agg(
+            count("*").alias("nb_occurrences_consultations"),
+            countDistinct("id_patient").alias("nb_patients_consultations"),
+            countDistinct("id_prof_sante").alias("nb_professionnels_prescripteurs")
+        ).alias("prev_cons")
+    
+    # Prévalence dans les hospitalisations
+    prevalence_hospitalisations = bronze_hospitalisations_clean \
+        .groupBy("code_diag") \
+        .agg(
+            count("*").alias("nb_occurrences_hospitalisations"),
+            countDistinct("id_patient").alias("nb_patients_hospitalisations"),
+            avg("jour_hospitalisation").alias("duree_moyenne_hospitalisation")
+        ).alias("prev_hosp")
+    
+    silver_diagnostics = bronze_diagnostics.alias("diag") \
+        .join(prevalence_consultations, "code_diag", "left") \
+        .join(prevalence_hospitalisations, "code_diag", "left") \
+        .select(
+            col("diag.*"),
+            col("prev_cons.nb_occurrences_consultations"),
+            col("prev_cons.nb_patients_consultations"),
+            col("prev_cons.nb_professionnels_prescripteurs"),
+            col("prev_hosp.nb_occurrences_hospitalisations"),
+            col("prev_hosp.nb_patients_hospitalisations"),
+            col("prev_hosp.duree_moyenne_hospitalisation")
+        ) \
+        .withColumn("gravite_pathologie",
+            when(col("nb_occurrences_hospitalisations").isNull(), "Benin")
+            .when(col("duree_moyenne_hospitalisation") > 20, "Severe")
+            .when(col("duree_moyenne_hospitalisation") > 7, "Modere")
+            .otherwise("Leger")
+        ) \
+        .withColumn("prevalence_globale",
+            when(col("nb_occurrences_consultations") > 1000, "Tres_frequente")
+            .when(col("nb_occurrences_consultations") > 100, "Frequente")
+            .when(col("nb_occurrences_consultations") > 10, "Occasionnelle")
+            .otherwise("Rare")
+        ) \
+        .withColumn("taux_hospitalisation",
+            when(col("nb_occurrences_consultations") > 0,
+                 col("nb_occurrences_hospitalisations") / col("nb_occurrences_consultations"))
+            .otherwise(0)
+        ) \
+        .withColumn("type_pathologie",
+            when(col("diagnostic").rlike("(?i)chronique|long|permanent"), "Chronique")
+            .when(col("diagnostic").rlike("(?i)aigu|urgence|sudden"), "Aigu")
+            .when(col("diagnostic").rlike("(?i)prevention|depistage|vaccin"), "Prevention")
+            .when(col("diagnostic").rlike("(?i)suivi|controle"), "Suivi")
+            .otherwise("Autre")
+        ) \
+        .fillna({
+            "nb_occurrences_consultations": 0,
+            "nb_patients_consultations": 0,
+            "nb_professionnels_prescripteurs": 0,
+            "nb_occurrences_hospitalisations": 0,
+            "nb_patients_hospitalisations": 0,
+            "duree_moyenne_hospitalisation": 0,
+            "taux_hospitalisation": 0
+        })
+    
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_diagnostics, "silver_diagnostics")
+    
+    return silver_diagnostics
 
-📈 MARTS BUSINESS CRÉÉS POUR LES KPI GOLD:
+@log_transformation
+def create_silver_satisfaction(bronze_satisfaction):
+    """Crée la table Silver de satisfaction avec indicateurs enrichis."""
+    
+    silver_satisfaction = bronze_satisfaction \
+        .withColumn("niveau_satisfaction",
+            when(col("score_all_ajust") >= 85, "Excellente")
+            .when(col("score_all_ajust") >= 75, "Bonne")
+            .when(col("score_all_ajust") >= 60, "Satisfaisante")
+            .otherwise("Insatisfaisante")
+        ) \
+        .withColumn("performance_relative",
+            when(col("score_all_ajust") > 80, "Au_dessus_attentes")
+            .when(col("score_all_ajust") > 70, "Conforme_attentes")
+            .otherwise("En_dessous_attentes")
+        ) \
+        .withColumn("taux_participation_categorise",
+            when(col("participation") == "1- Obligatoire", "Obligatoire")
+            .otherwise("Volontaire")
+        ) \
+        .withColumn("score_global_normalise",
+            (col("score_all_ajust") - 50) / 50  # Normalisation 0-1
+        )
+    
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_satisfaction, "silver_satisfaction")
+    
+    return silver_satisfaction
 
-1. 🏥 Taux de consultation par établissement et période
-2. 🩺 Taux de consultation par diagnostic et période  
-3. 🏨 Taux global d'hospitalisation par période
-4. 💊 Taux d'hospitalisation par diagnostic et période
-5. 👥 Taux d'hospitalisation par sexe et âge
-6. 👨‍⚕️ Taux de consultation par professionnel
-7. 📊 Décès par localisation (2019)
-8. ⭐ Satisfaction par région (2019)
+@log_transformation
+def create_silver_indicators_metier(silver_consultations, silver_hospitalisations, silver_deces, silver_satisfaction):
+    """Crée la table Silver des indicateurs métier agrégés."""
+    
+    # Indicateurs consultations
+    indicateurs_consultations = silver_consultations \
+        .groupBy("region", "categorie_age", "sexe", year("date_consultation").alias("annee")) \
+        .agg(
+            count("*").alias("nb_consultations"),
+            countDistinct("id_patient").alias("nb_patients_uniques"),
+            countDistinct("id_prof_sante").alias("nb_professionnels"),
+            avg("duree_consultation_heures").alias("duree_moyenne_consultation")
+        ) \
+        .withColumn("type_indicateur", lit("consultations"))
 
-🔜 PRÊT POUR LES REQUÊTES GOLD:
+    # Indicateurs hospitalisations
+    indicateurs_hospitalisations = silver_hospitalisations \
+        .groupBy("region", "categorie_age", "sexe", year("date_admission").alias("annee")) \
+        .agg(
+            count("*").alias("nb_hospitalisations"),
+            countDistinct("id_patient").alias("nb_patients_hospitalises"),
+            avg("jour_hospitalisation").alias("duree_moyenne_sejour"),
+            spark_sum("jour_hospitalisation").alias("total_jours_hospitalisation")
+        ) \
+        .withColumn("type_indicateur", lit("hospitalisations"))
 
-Les données Silver sont maintenant optimisées pour:
-• Requêtes analytiques performantes
-• Agrégations complexes
-• Analyses temporelles
-• Segmentation multi-dimensionnelle
+    # Indicateurs décès
+    indicateurs_deces = silver_deces \
+        .groupBy("region_deces", "tranche_age_deces", "sexe", year("date_deces").alias("annee")) \
+        .agg(
+            count("*").alias("nb_deces"),
+            avg("age").alias("age_moyen_deces"),
+            countDistinct("departement_deces").alias("nb_departements_touches")
+        ) \
+        .withColumn("type_indicateur", lit("deces")) \
+        .withColumnRenamed("region_deces", "region") \
+        .withColumnRenamed("tranche_age_deces", "categorie_age")
 
-Prochaine étape: Exécuter le pipeline Gold pour générer les KPI avancés.
-    """)
+    # Indicateurs satisfaction
+    indicateurs_satisfaction = silver_satisfaction \
+        .groupBy("region", "niveau_satisfaction") \
+        .agg(
+            count("*").alias("nb_etablissements"),
+            avg("score_all_ajust").alias("score_satisfaction_moyen"),
+            avg("taux_reco_brut").alias("taux_recommandation_moyen")
+        ) \
+        .withColumn("type_indicateur", lit("satisfaction")) \
+        .withColumn("categorie_age", lit("Tous")) \
+        .withColumn("sexe", lit("Tous")) \
+        .withColumn("annee", lit(2020))
 
-if __name__ == "__main__":
+    # Union de tous les indicateurs
+    silver_indicators_metier = indicateurs_consultations \
+        .unionByName(indicateurs_hospitalisations, allowMissingColumns=True) \
+        .unionByName(indicateurs_deces, allowMissingColumns=True) \
+        .unionByName(indicateurs_satisfaction, allowMissingColumns=True)
+
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_indicators_metier, "silver_indicators_metier")
+    
+    return silver_indicators_metier
+
+def main():
+    """Exécute le pipeline complet du layer Silver."""
     print("""
-    ╔══════════════════════════════════════════════════════════════╗
-    ║                SILVER → GOLD READY PIPELINE                 ║
-    ║     Préparation optimale des données pour la couche Gold    ║
-    ║           AVEC MARTS BUSINESS ET PARTITIONNEMENT            ║
-    ╚══════════════════════════════════════════════════════════════╝
+    ╔══════════════════════════════════════════╗
+    ║           SILVER LAYER PIPELINE          ║
+    ║     Enrichissement et Indicateurs        ║
+    ╚══════════════════════════════════════════╝
     """)
     
-    spark = None
     try:
+        # Initialisation Spark
         spark = get_spark_session()
         
-        # 1. Création des dimensions conformées
-        dimensions = create_conformed_dimensions(spark)
+        # Lecture des données Bronze
+        print("📥 Lecture des données Bronze...")
+        bronze_patients = read_bronze_table(spark, "patients")
+        bronze_consultations = read_bronze_table(spark, "consultations")
+        bronze_hospitalisations = read_bronze_table(spark, "hospitalisations")
+        bronze_deces = read_bronze_table(spark, "deces")
+        bronze_etablissements = read_bronze_table(spark, "etablissements")
+        bronze_professionnels = read_bronze_table(spark, "professionnels_sante")
+        bronze_diagnostics = read_bronze_table(spark, "diagnostics")
+        bronze_satisfaction = read_bronze_table(spark, "satisfaction_mco_2020")
         
-        # 2. Création des faits pour Gold
-        facts = create_gold_ready_facts(spark, dimensions)
+        # Création des tables Silver
+        print("\n🏗️  Construction des tables Silver...")
         
-        # 3. Création des marts business
-        marts = create_business_marts(spark, dimensions, facts)
+        silver_patients = create_silver_patients(bronze_patients, bronze_consultations, bronze_hospitalisations)
+        silver_consultations = create_silver_consultations(bronze_consultations, bronze_patients, bronze_diagnostics, bronze_professionnels, bronze_etablissements)
+        silver_hospitalisations = create_silver_hospitalisations(bronze_hospitalisations, bronze_patients, bronze_diagnostics, bronze_etablissements)
+        silver_deces = create_silver_deces(bronze_deces)
+        silver_etablissements = create_silver_etablissements(bronze_etablissements, bronze_hospitalisations, bronze_satisfaction)
+        silver_professionnels = create_silver_professionnels(bronze_professionnels, bronze_consultations)
+        silver_diagnostics = create_silver_diagnostics(bronze_diagnostics, bronze_consultations, bronze_hospitalisations)
+        silver_satisfaction = create_silver_satisfaction(bronze_satisfaction)
+        silver_indicators_metier = create_silver_indicators_metier(silver_consultations, silver_hospitalisations, silver_deces, silver_satisfaction)
         
-        # 4. Regroupement de toutes les tables
-        all_tables = {**dimensions, **facts, **marts}
+        # Écriture des tables Silver
+        print("\n💾 Écriture des tables Silver...")
+        write_silver_table(silver_patients, "patients")
+        write_silver_table(silver_consultations, "consultations", ["date_consultation_annee", "date_consultation_mois"])
+        write_silver_table(silver_hospitalisations, "hospitalisations", ["date_admission_annee", "date_admission_mois"])
+        write_silver_table(silver_deces, "deces", ["date_deces_annee", "date_deces_mois"])
+        write_silver_table(silver_etablissements, "etablissements")
+        write_silver_table(silver_professionnels, "professionnels_sante")
+        write_silver_table(silver_diagnostics, "diagnostics")
+        write_silver_table(silver_satisfaction, "satisfaction")
+        write_silver_table(silver_indicators_metier, "indicators_metier", ["type_indicateur", "annee"])
         
-        # 5. Écriture optimisée AVEC PARTITIONNEMENT
-        write_silver_for_gold(spark, all_tables)
+        # Rapport final
+        print(f"""
+    🎉 PIPELINE SILVER TERMINÉ AVEC SUCCÈS!
+
+    📊 TABLES SILVER CRÉÉES:
+    ✅ silver_patients: {silver_patients.count():,} lignes
+    ✅ silver_consultations: {silver_consultations.count():,} lignes  
+    ✅ silver_hospitalisations: {silver_hospitalisations.count():,} lignes
+    ✅ silver_deces: {silver_deces.count():,} lignes
+    ✅ silver_etablissements: {silver_etablissements.count():,} lignes
+    ✅ silver_professionnels: {silver_professionnels.count():,} lignes
+    ✅ silver_diagnostics: {silver_diagnostics.count():,} lignes
+    ✅ silver_satisfaction: {silver_satisfaction.count():,} lignes
+    ✅ silver_indicators_metier: {silver_indicators_metier.count():,} lignes
+
+    🎯 INDICATEURS PRÉPARÉS:
+    • Taux de consultation par établissement (✅ LIEN AJOUTÉ)
+    • Taux d'hospitalisation par diagnostic  
+    • Décès par région et âge
+    • Satisfaction par établissement
+    • Performance des professionnels
+    • Prévalence des pathologies
+
+    📈 MÉTRIQUES DE QUALITÉ:
+    • Monitoring des temps d'exécution
+    • Taux de nulls contrôlés
+    • Jointures optimisées avec alias
+
+    🚀 PRÊT POUR LE LAYER GOLD!
+        """)
         
-        # 6. Rapport de préparation
-        generate_gold_readiness_report({**dimensions, **facts}, marts)
-        
-        print("\n✅ Pipeline Silver terminé - Prêt pour Gold!")
-        print("📊 Marts business créés pour répondre aux KPI demandés")
+        spark.stop()
         
     except Exception as e:
-        print(f"\n❌ Erreur lors de l'exécution: {e}")
+        print(f"💥 Erreur pipeline Silver: {e}")
         import traceback
         traceback.print_exc()
-    finally:
-        # S'assurer que Spark est bien arrêté à la fin
-        if spark:
-            try:
-                spark.stop()
-                print("🔴 Spark session arrêtée")
-            except:
-                pass
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
