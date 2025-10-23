@@ -199,55 +199,56 @@ services:
   # SUPERSET 
   # ============================================================
   superset-db:
-    image: postgres:15-alpine
-    container_name: chu_superset_db
-    environment:
-      POSTGRES_USER: superset
-      POSTGRES_PASSWORD: superset123
-      POSTGRES_DB: superset
-    volumes:
-      - superset_db_data:/var/lib/postgresql/data
-    networks:
-      - bigdata_network
-    restart: unless-stopped
+      image: postgres:15-alpine
+      container_name: chu_superset_db
+      environment:
+        POSTGRES_USER: superset
+        POSTGRES_PASSWORD: superset123
+        POSTGRES_DB: superset
+      volumes:
+        - superset_db_data:/var/lib/postgresql/data
+      networks:
+        - bigdata_network
+      restart: unless-stopped
+
+  superset-init:
+      image: apache/superset:3.0.0
+      container_name: chu_superset_init
+      depends_on:
+        - superset-db
+      environment:
+        SQLALCHEMY_DATABASE_URI: "postgresql://superset:superset123@superset-db:5432/superset"
+        SUPERSET_SECRET_KEY: 'thisISaSECRET_1234567890abcdefghijklmnopqrstuvwxyz'
+      networks:
+        - bigdata_network
+      restart: "no"
+      command: |
+        bash -c "
+          echo 'Initialisation de Superset...'
+          sleep 15
+          superset db upgrade
+          superset fab create-admin --username admin --firstname Admin --lastname User --email admin@chu.com --password admin123
+          superset init
+          echo 'Initialisation terminée!'
+        "
 
   superset:
     image: apache/superset:3.0.0
     container_name: chu_superset
     depends_on:
-      - superset-db
+      - superset-init
     environment:
+      SQLALCHEMY_DATABASE_URI: "postgresql://superset:superset123@superset-db:5432/superset"
       SUPERSET_SECRET_KEY: 'thisISaSECRET_1234567890abcdefghijklmnopqrstuvwxyz'
-      DATABASE_DIALECT: postgresql
-      DATABASE_HOST: superset-db
-      DATABASE_PORT: 5432
-      DATABASE_DB: superset
-      DATABASE_USER: superset
-      DATABASE_PASSWORD: superset123
-      # Ajoutez ces variables pour éviter SQLite
-      SUPERSET_ENV: production
-      FLASK_ENV: production
     ports:
       - "8088:8088"
     volumes:
-      - ./superset:/app/superset_home  # Modifié le chemin
+      - ./superset:/app/superset_home
     networks:
       - bigdata_network
     restart: unless-stopped
-    command: >
-      bash -c "
-        /bin/bash -c '
-          until pg_isready -h superset-db -p 5432; do
-            echo \"Waiting for PostgreSQL...\";
-            sleep 2;
-          done;
-          superset db upgrade;
-          superset fab create-admin --username admin --firstname Admin --lastname User --email admin@chu.com --password admin123 || true;
-          superset init;
-          /usr/bin/run-server.sh
-        '
-      "
-
+    command: /usr/bin/run-server.sh
+# ============================================================
 volumes:
   minio_data:
   airflow_db_data:
