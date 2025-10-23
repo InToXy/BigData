@@ -1,3 +1,4 @@
+#Jupyter
 import os
 import sys
 import uuid as uuid_lib
@@ -20,7 +21,7 @@ MINIO_CONFIG = {
 }
 
 POSTGRES_CONFIG = {
-    "host": os.getenv("POSTGRES_HOST", "chu_postgres_data"),
+    "host": os.getenv("POSTGRES_HOST", "bigdata_postgres"),
     "port": os.getenv("POSTGRES_PORT", "5432"),
     "database": os.getenv("POSTGRES_DB", "healthcare_data"),
     "user": os.getenv("POSTGRES_USER", "admin"),
@@ -150,7 +151,7 @@ def clean_col_names(df):
     return df.toDF(*[re.sub(r'[^a-zA-Z0-9]', '_', c).strip('_') for c in df.columns])
 
 def normalize_dates(df):
-    """Normalise les colonnes de dates avec support des formats variés et correction TIME."""
+    """Normalise les colonnes de dates avec support des formats variés."""
     date_columns = []
     time_columns = []
     

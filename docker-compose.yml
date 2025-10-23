@@ -75,7 +75,7 @@ services:
       PGPASSWORD=admin123 psql -h bigdata_postgres -p 5432 -U admin -d postgres -c \"CREATE ROLE postgres WITH SUPERUSER LOGIN PASSWORD 'admin123';\" 2>/dev/null || true &&
       PGPASSWORD=admin123 dropdb --if-exists -h bigdata_postgres -p 5432 -U admin healthcare_data &&
       PGPASSWORD=admin123 createdb -h bigdata_postgres -p 5432 -U admin healthcare_data &&
-      PGPASSWORD=admin123 pg_restore -v -h bigdata_postgres -p 5432 -U admin -d healthcare_data /tmp/data2023_avec_deces.dump &&
+      PGPASSWORD=admin123 pg_restore -Fc -v -h bigdata_postgres -p 5432 -U admin -d healthcare_data /tmp/data2023_avec_deces.dump &&
       echo 'Data import complete.'"
     restart: "no"
 

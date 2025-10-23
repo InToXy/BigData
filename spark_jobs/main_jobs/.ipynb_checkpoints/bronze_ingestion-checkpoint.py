@@ -6,7 +6,7 @@ from pyspark.sql.functions import (
     sha2, col, current_timestamp, lit, concat_ws, 
     trim, upper, lower, regexp_replace, when, 
     coalesce, udf, to_date, year, month,
-    datediff, floor, substring, length, md5, date_format
+    datediff, floor, substring, length, md5
 )
 from pyspark.sql.types import StringType, DateType, TimestampType
 import re
@@ -20,7 +20,7 @@ MINIO_CONFIG = {
 }
 
 POSTGRES_CONFIG = {
-    "host": os.getenv("POSTGRES_HOST", "chu_postgres_data"),
+    "host": os.getenv("POSTGRES_HOST", "bigdata_postgres"),
     "port": os.getenv("POSTGRES_PORT", "5432"),
     "database": os.getenv("POSTGRES_DB", "healthcare_data"),
     "user": os.getenv("POSTGRES_USER", "admin"),
@@ -150,26 +150,14 @@ def clean_col_names(df):
     return df.toDF(*[re.sub(r'[^a-zA-Z0-9]', '_', c).strip('_') for c in df.columns])
 
 def normalize_dates(df):
-    """Normalise les colonnes de dates avec support des formats variés et correction TIME."""
+    """Normalise les colonnes de dates avec support des formats variés."""
     date_columns = []
-    time_columns = []
     
     for column in df.columns:
         col_lower = column.lower()
-        # Identifier les colonnes TIME (heures uniquement)
-        if any(keyword in col_lower for keyword in ["heure", "time"]) and not any(keyword in col_lower for keyword in ["date", "timestamp"]):
-            time_columns.append(column)
-        # Identifier les colonnes DATE
-        elif any(keyword in col_lower for keyword in ["date", "naissance", "deces", "entree", "sortie", "consultation", "admission"]):
+        if any(keyword in col_lower for keyword in ["date", "naissance", "deces", "entree", "sortie", "consultation", "admission"]):
             date_columns.append(column)
     
-    # Traiter les colonnes TIME : convertir timestamp en string time (HH:mm:ss)
-    for column in time_columns:
-        if isinstance(df.schema[column].dataType, TimestampType):
-            # Extraire uniquement l'heure au format HH:mm:ss
-            df = df.withColumn(column, date_format(col(column), "HH:mm:ss"))
-    
-    # Traiter les colonnes DATE
     for column in date_columns:
         if not isinstance(df.schema[column].dataType, DateType):
             df = df.withColumn(
