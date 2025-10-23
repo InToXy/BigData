@@ -40,21 +40,34 @@ s3_client = boto3.client(
 
 print("✅ Connexion MinIO établie")
 
-# Datasets à tester
-datasets = [
-    "activites_professionnels",
-    "adherents",
-    "consultations",
-    "deces",
-    "diagnostics",
-    "patients",
-    "professionnels_sante_pg",
-    "etablissements",
-    "hospitalisations",
-    "mutuelles"
-]
+# Découverte automatique des datasets dans le bucket bronze
+print(f"\n🔍 Découverte des datasets dans le bucket '{BUCKET}'...")
+try:
+    response = s3_client.list_objects_v2(Bucket=BUCKET, Delimiter='/')
+    
+    datasets = []
+    if 'CommonPrefixes' in response:
+        for prefix in response['CommonPrefixes']:
+            dataset_name = prefix['Prefix'].rstrip('/')
+            datasets.append(dataset_name)
+    
+    datasets.sort()  # Tri alphabétique
+    
+    if not datasets:
+        print(f"❌ Aucun dataset trouvé dans le bucket '{BUCKET}'")
+        print(f"💡 Vérifiez que les données ont été ingérées dans MinIO")
+        exit(1)
+    
+    print(f"✅ {len(datasets)} dataset(s) détecté(s) :")
+    for ds in datasets:
+        print(f"   • {ds}")
+    
+except Exception as e:
+    print(f"❌ Erreur lors de la découverte des datasets: {e}")
+    print(f"💡 Vérifiez que MinIO est accessible et que le bucket '{BUCKET}' existe")
+    exit(1)
 
-print(f"\n📊 Test de lecture sur les datasets depuis MinIO...\n")
+print(f"\n📊 Test de lecture sur {len(datasets)} datasets depuis MinIO...\n")
 print(f"{'Dataset':<35} {'Lignes':>12} {'Temps':>10} {'Débit':>15}")
 print("="*75)
 
