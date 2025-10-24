@@ -197,6 +197,26 @@ services:
     command: start-notebook.sh --NotebookApp.token='admin123' --NotebookApp.password=''
 
   # ============================================================
+  # TRINO - Query Engine for PowerBI
+  # ============================================================
+  trino:
+    image: trinodb/trino:435
+    container_name: chu_trino
+    depends_on:
+      - minio
+      - bigdata_postgres
+    ports:
+      - "8090:8080"  # Web UI et API
+    volumes:
+      - ./trino/etc:/etc/trino
+      - ./trino/catalog:/etc/trino/catalog
+    networks:
+      - bigdata_network
+    restart: unless-stopped
+    environment:
+      - TRINO_ENVIRONMENT=production
+
+  # ============================================================
   # SUPERSET
   # ============================================================
   superset-db:
