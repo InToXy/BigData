@@ -4,3 +4,7 @@ apache-airflow-providers-apache-hdfs>=3.2.1
 hdfs>=2.7.0
 pandas>=2.0.0
 psycopg2-binary>=2.9.9
+
+# Delta Lake for Gold Zone
+delta-spark==2.4.0
+pyspark==3.5.0

@@ -32,8 +32,9 @@ services:
       /usr/bin/mc mb myminio/bronze || true;
       /usr/bin/mc mb myminio/silver || true;
       /usr/bin/mc mb myminio/gold || true;
+      /usr/bin/mc mb myminio/gold-delta || true;
       /usr/bin/mc mb myminio/airflow-logs || true;
-      echo 'Buckets MinIO créés';
+      echo 'Buckets MinIO créés (avec gold-delta pour Delta Lake)';
       exit 0;
       "
 
