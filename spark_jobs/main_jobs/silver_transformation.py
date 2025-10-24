@@ -82,8 +82,11 @@ def get_spark_session():
             .config("spark.hadoop.fs.s3a.path.style.access", "true") \
             .config("spark.sql.parquet.compression.codec", "snappy") \
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false") \
-            .config("spark.sql.autoBroadcastJoinThreshold", "10485760")  # 10MB pour broadcast
-        
+            .config("spark.sql.autoBroadcastJoinThreshold", "10485760") \
+            .config("spark.sql.shuffle.partitions", "8") \
+            .config("spark.driver.memory", "2g") \
+            .config("spark.executor.memory", "2g")
+
         spark = builder.getOrCreate()
         spark.sparkContext.setLogLevel("WARN")
         

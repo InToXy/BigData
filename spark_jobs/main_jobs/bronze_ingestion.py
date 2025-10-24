@@ -217,36 +217,38 @@ def diagnose_date_issues(df, table_name):
     if "deces" in table_name.lower():
         print(f"\n🔍 DIAGNOSTIC DES DATES - {table_name}")
         print("=" * 50)
-        
-        date_columns = [c for c in df.columns if any(keyword in c.lower() for keyword in ["date", "naissance", "deces"])]
-        
-        for date_col in date_columns:
+
+        # Identifier les VRAIES colonnes de dates seulement
+        real_date_columns = ["date_naissance", "date_deces"]
+
+        for date_col in real_date_columns:
             if date_col in df.columns:
                 # Compter les valeurs nulles
                 null_count = df.filter(col(date_col).isNull()).count()
                 total_count = df.count()
-                
-                # Analyser les années problématiques
+
+                # Analyser les années avec CORRECTION du format
                 year_stats = df.select(
                     year(col(date_col)).alias("year")
                 ).filter(
                     col("year").isNotNull()
                 ).groupBy("year").count().orderBy("count", ascending=False).limit(10)
-                
+
                 print(f"\n📅 {date_col}:")
                 print(f"   • Total: {total_count:,} lignes")
                 print(f"   • Nulles: {null_count:,} ({null_count/total_count*100:.1f}%)")
-                
-                # Afficher les années les plus fréquentes
+
+                # CORRECTION: Afficher correctement les années
                 year_samples = year_stats.collect()
                 if year_samples:
-                    print(f"   • Top années: {[f'{row.year} ({row.count})' for row in year_samples]}")
-                
+                    year_list = [f"{row['year']} ({row['count']:,})" for row in year_samples]
+                    print(f"   • Top années: {year_list[:5]}")  # Limiter à 5 pour lisibilité
+
                 # Détecter les années hors limites
                 invalid_years = df.filter(
                     (year(col(date_col)) < 1900) | (year(col(date_col)) > 2100)
                 ).count()
-                
+
                 if invalid_years > 0:
                     print(f"   ⚠️  Années invalides: {invalid_years}")
 
@@ -709,32 +711,10 @@ def enhance_deces_data(df, config):
     """Améliore les données décès avec extraction région/département - VERSION CORRIGÉE."""
     if config["output_table"] != "deces":
         return df
-    
+
     print("   🔧 Amélioration des données décès")
-    
-    # CORRECTION CRITIQUE: Identifier les VRAIES colonnes de dates vs codes géographiques
-    real_date_columns = ["date_naissance", "date_deces"]
-    geographic_code_columns = ["code_lieu_naissance", "lieu_naissance", "pays_naissance", "code_lieu_deces", "numero_acte_deces"]
-    
-    # 1. RESTAURER les colonnes géographiques qui ont été mal converties en dates
-    for geo_col in geographic_code_columns:
-        if geo_col in df.columns and isinstance(df.schema[geo_col].dataType, (DateType, TimestampType)):
-            print(f"     🔄 Restauration de {geo_col} (colonne géographique, pas une date)")
-            # Re-lire la table pour récupérer les données brutes
-            try:
-                df_raw = read_postgres_table_safe(spark, config["path"], config)
-                if geo_col in df_raw.columns:
-                    # Récupérer la colonne originale comme string
-                    df = df.drop(geo_col).join(
-                        df_raw.select("id", col(geo_col).cast("string")), 
-                        on="id", 
-                        how="left"
-                    )
-                    print(f"     ✅ {geo_col} restauré comme chaîne de caractères")
-            except Exception as e:
-                print(f"     ⚠️  Impossible de restaurer {geo_col}: {e}")
-    
-    # 2. CORRECTION: code_lieu_deces est un code géographique, pas une date
+
+    # CORRECTION: code_lieu_deces est un code géographique, pas une date
     if "code_lieu_deces" in df.columns:
         # S'assurer que c'est une chaîne de caractères
         if not isinstance(df.schema["code_lieu_deces"].dataType, StringType):
@@ -840,7 +820,7 @@ def enhance_satisfaction_data(df, config):
 def verify_bronze_data():
     """Vérifie que les données essentielles sont présentes pour les indicateurs."""
     spark = get_spark_session()
-    
+
     essential_tables = {
         "patients": ["id_patient", "sexe", "date_naissance", "age"],
         "consultations": ["id_patient", "date_consultation", "code_diag", "id_prof_sante"],
@@ -848,7 +828,7 @@ def verify_bronze_data():
         "deces": ["date_deces", "region", "departement"],
         "diagnostics": ["code_diag", "diagnostic"],
         "professionnels_sante": ["identifiant", "profession"],
-        "etablissements": ["identifiant_organisation", "finess_site", "region"],
+        "etablissements": ["finess_site", "region"],  # CORRECTION: identifiant_organisation devient finess_site
         "satisfaction_mco_2020": ["finess", "region", "score_all_ajust"]
     }
     
