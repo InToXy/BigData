@@ -39,8 +39,14 @@ MINIO_CONFIG = {
 def get_spark_session():
     """Session Spark optimisée pour Gold Layer"""
     try:
+        # Charger les JARs nécessaires pour S3
+        jars_dir = "/home/jovyan/jars"
+        jar_files = [f for f in os.listdir(jars_dir) if f.endswith('.jar')]
+        jars_path = ",".join([f"{jars_dir}/{jar}" for jar in jar_files])
+
         spark = SparkSession.builder \
             .appName("Gold Layer - Star Schema") \
+            .config("spark.jars", jars_path) \
             .config("spark.sql.adaptive.enabled", "true") \
             .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
             .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \

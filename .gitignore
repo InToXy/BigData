@@ -1,11 +1,146 @@
-# Python virtual environment
+# ============================================================
+# PYTHON
+# ============================================================
+# Virtual environments
 .venv/
+venv/
+env/
+ENV/
+
+# Python cache
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# ============================================================
+# DATA & LOGS
+# ============================================================
+# Source data (too large for Git)
+data/source/
+data/raw/
 
 # Logs
 logs/
+*.log
+airflow/logs/
 
-# Data files
-data/
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+*~
 
+# ============================================================
+# DOCKER & SERVICES
+# ============================================================
+# Docker volumes data (managed by Docker)
+postgres_data/
+superset_db_data/
+airflow_db_data/
+metastore_db_data/
+
+# Airflow (commented out in docker-compose)
+airflow/
+dags/
+config/
+tools/
+
+# ============================================================
+# SPARK & BIG DATA
+# ============================================================
+# JAR files (too large, download separately)
 jars/
+*.jar
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Parquet files (generated data)
+*.parquet
+*.snappy
+
+# Delta Lake
+_delta_log/
+*.checkpoint
+
+# ============================================================
+# SUPERSET
+# ============================================================
+superset/superset.db
+superset/.cache/
+superset/.local/
+superset/init/
+
+# ============================================================
+# ENVIRONMENT & SECRETS
+# ============================================================
+# Environment variables
+.env.local
+.env.*.local
+*.env.backup
+
+# Secrets (NEVER commit passwords/keys!)
+secrets/
+*.pem
+*.key
+*.crt
+
+# ============================================================
+# OS
+# ============================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+.directory
+
+# ============================================================
+# GUIDES & DOCUMENTATION TEMPORAIRES
+# ============================================================
+# Guides de migration/tests (à supprimer après validation)
+*_DRAFT.md
+*_OLD.md
+*_BACKUP.md
+GUIDE_DELTA_*.md
+SOLUTION_*.md
+TRINO_*_SUCCESS.md

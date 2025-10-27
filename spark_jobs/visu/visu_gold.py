@@ -77,15 +77,21 @@ def list_all_gold_tables(spark):
         
         # Liste des tables Gold attendues
         expected_gold_tables = [
-            "gold_taux_consultation_etablissement",
-            "gold_taux_consultation_diagnostic", 
-            "gold_taux_hospitalisation_global",
-            "gold_taux_hospitalisation_diagnostic",
-            "gold_taux_hospitalisation_demographie",
-            "gold_taux_consultation_professionnel",
-            "gold_deces_localisation_2019",
-            "gold_satisfaction_region_2020",
-            "gold_fait_principal_bi"
+            "dim_diagnostic",
+            "dim_etablissement", 
+            "dim_localisation",
+            "dim_patient",
+            "dim_professionnel",
+            "dim_temps",
+            "fact_consultation",
+            "fact_deces",
+            "fact_hospitalisation",
+            "mart_diagnostic_epidemio",
+            "mart_demographie",
+            "mart_professionnel",
+            "mart_satisfaction_region_2020",
+            "mart_deces_localisation_2019",
+            "mart_performance_etablissement",
         ]
         
         found_tables = []

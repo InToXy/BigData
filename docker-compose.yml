@@ -196,7 +196,25 @@ services:
     command: start-notebook.sh --NotebookApp.token='admin123' --NotebookApp.password=''
 
   # ============================================================
-  # SUPERSET 
+  # TRINO - SQL Query Engine
+  # ============================================================
+  trino:
+    image: trinodb/trino:latest
+    container_name: chu_trino
+    depends_on:
+      - minio
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog
+    environment:
+      TRINO_ENVIRONMENT: production
+    networks:
+      - bigdata_network
+    restart: unless-stopped
+
+  # ============================================================
+  # SUPERSET
   # ============================================================
   superset-db:
       image: postgres:15-alpine
@@ -217,8 +235,9 @@ services:
       depends_on:
         - superset-db
       environment:
-        SQLALCHEMY_DATABASE_URI: "postgresql://superset:superset123@superset-db:5432/superset"
-        SUPERSET_SECRET_KEY: 'thisISaSECRET_1234567890abcdefghijklmnopqrstuvwxyz'
+        SUPERSET_CONFIG_PATH: /app/superset_home/superset_config.py
+      volumes:
+        - ./superset:/app/superset_home
       networks:
         - bigdata_network
       restart: "no"
@@ -227,7 +246,7 @@ services:
           echo 'Initialisation de Superset...'
           sleep 15
           superset db upgrade
-          superset fab create-admin --username admin --firstname Admin --lastname User --email admin@chu.com --password admin123
+          superset fab create-admin --username admin --firstname Admin --lastname User --email admin@chu.com --password admin123 || echo 'Admin already exists'
           superset init
           echo 'Initialisation terminée!'
         "
@@ -237,9 +256,9 @@ services:
     container_name: chu_superset
     depends_on:
       - superset-init
+      - trino
     environment:
-      SQLALCHEMY_DATABASE_URI: "postgresql://superset:superset123@superset-db:5432/superset"
-      SUPERSET_SECRET_KEY: 'thisISaSECRET_1234567890abcdefghijklmnopqrstuvwxyz'
+      SUPERSET_CONFIG_PATH: /app/superset_home/superset_config.py
     ports:
       - "8088:8088"
     volumes:
