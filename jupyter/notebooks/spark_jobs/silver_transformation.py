@@ -125,9 +125,9 @@ def create_dim_geographie(spark, df_deces, df_etablissements, batch_id):
     if "code_postal" in df_etablissements.columns:
         geo_etab = df_etablissements.select(
             F.col("code_postal").alias("code_lieu"),
-            F.col("departement").cast(StringType()).alias("departement") if "departement" in df_etablissements.columns else F.lit(None).cast(StringType()).alias("departement"),
-            F.col("region").cast(StringType()).alias("region") if "region" in df_etablissements.columns else F.lit(None).cast(StringType()).alias("region"),
-            F.col("ville").cast(StringType()).alias("ville") if "ville" in df_etablissements.columns else F.lit(None).cast(StringType()).alias("ville"),
+            F.col("departement").alias("departement") if "departement" in df_etablissements.columns else F.lit(None).alias("departement"),
+            F.col("region").alias("region") if "region" in df_etablissements.columns else F.lit(None).alias("region"),
+            F.col("ville").alias("ville") if "ville" in df_etablissements.columns else F.lit(None).alias("ville"),
             F.lit("Etablissement").alias("type_lieu")
         ).filter(F.col("code_postal").isNotNull()).distinct()
         
@@ -255,13 +255,13 @@ def create_fait_deces(spark, df_deces, dim_temps, dim_geo, batch_id):
     fait = fait.withColumn(
         "categorie_age",
         F.when(F.col("age_deces") < 1, "< 1 an")
-        .when(F.col("age_deces") < 18, "1-17 ans")
-        .when(F.col("age_deces") < 30, "18-29 ans")
-        .when(F.col("age_deces") < 45, "30-44 ans")
-        .when(F.col("age_deces") < 60, "45-59 ans")
-        .when(F.col("age_deces") < 75, "60-74 ans")
-        .when(F.col("age_deces") < 90, "75-89 ans")
-        .when(F.col("age_deces") >= 90, "90+ ans")
+        .F.when(F.col("age_deces") < 18, "1-17 ans")
+        .F.when(F.col("age_deces") < 30, "18-29 ans")
+        .F.when(F.col("age_deces") < 45, "30-44 ans")
+        .F.when(F.col("age_deces") < 60, "45-59 ans")
+        .F.when(F.col("age_deces") < 75, "60-74 ans")
+        .F.when(F.col("age_deces") < 90, "75-89 ans")
+        .F.when(F.col("age_deces") >= 90, "90+ ans")
         .otherwise("Inconnu")
     )
     

@@ -9,3 +9,11 @@ logs/
 data/
 
 jars/
+# Airflow
+airflow/logs/
+airflow/__pycache__/
+dags/__pycache__/
+*.pyc
+airflow.db
+airflow.cfg
+webserver_config.py

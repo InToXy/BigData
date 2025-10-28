@@ -1,0 +1,13 @@
+# Fichiers à ignorer par Airflow
+*.pyc
+__pycache__/
+.git/
+.gitignore
+*.log
+*.md
+README*
+.DS_Store
+*.swp
+*.swo
+*~
+.env
