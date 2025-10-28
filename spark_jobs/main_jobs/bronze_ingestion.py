@@ -7,7 +7,8 @@ from pyspark.sql.functions import (
     trim, upper, lower, regexp_replace, when, 
     coalesce, udf, to_date, year, month,
     datediff, floor, substring, length, md5,
-    regexp_extract, split, expr, unix_timestamp
+    regexp_extract, split, expr, unix_timestamp,
+    monotonically_increasing_id
 )
 from pyspark.sql.types import StringType, DateType, TimestampType, IntegerType
 import re
@@ -501,11 +502,24 @@ def generate_business_keys(df, config):
             org_col = "identifiant_organisation" if "identifiant_organisation" in df.columns else "finess"
             df = df.withColumn("_sk_etablissement", sha2(col(org_col).cast("string"), 256))
         
+        # ✅ CORRECTION: Ajouter _sk_professionnel pour consultations
+        if "id_prof_sante" in df.columns:
+            df = df.withColumn("_sk_professionnel", sha2(col("id_prof_sante").cast("string"), 256))
+        
         if "region" in df.columns:
             df = df.withColumn("_sk_region", sha2(upper(trim(col("region"))).cast("string"), 256))
         
         if "sexe" in df.columns:
             df = df.withColumn("_sk_sexe", sha2(upper(trim(col("sexe"))).cast("string"), 256))
+    
+    # Clés pour les tables de référence
+    if "etablissement" in output_table.lower():
+        if "finess_site" in df.columns:
+            df = df.withColumn("_sk_etablissement", sha2(col("finess_site").cast("string"), 256))
+    
+    if "diagnostic" in output_table.lower():
+        if "code_diag" in df.columns:
+            df = df.withColumn("_sk_diagnostic", sha2(col("code_diag").cast("string"), 256))
     
     # Pour les professionnels de santé
     if "professionnel" in output_table.lower():
@@ -521,6 +535,9 @@ def add_technical_columns(df, config):
     
     # Hash du record complet pour détection de changements
     df = df.withColumn("_hash_record", sha2(concat_ws("|", *[coalesce(col(c).cast("string"), lit("")) for c in df.columns]), 256))
+    
+    # ID NUMÉRIQUE POUR SUPERSET: row_number() absolu
+    df = df.withColumn("_id", monotonically_increasing_id())
     
     # Métadonnées d'ingestion
     df = df.withColumn("_ingestion_date", current_timestamp())
@@ -822,14 +839,19 @@ def verify_bronze_data():
     spark = get_spark_session()
 
     essential_tables = {
-        "patients": ["id_patient", "sexe", "date_naissance", "age"],
-        "consultations": ["id_patient", "date_consultation", "code_diag", "id_prof_sante"],
+        "patient": ["id_patient", "sexe", "date_naissance", "age"],
+        "consultation": ["id_patient", "date_consultation", "code_diag", "id_prof_sante"],
         "hospitalisations": ["id_patient", "date_admission", "diagnostic_principal", "sexe"],
-        "deces": ["date_deces", "region", "departement"],
-        "diagnostics": ["code_diag", "diagnostic"],
-        "professionnels_sante": ["identifiant", "profession"],
-        "etablissements": ["finess_site", "region"],  # CORRECTION: identifiant_organisation devient finess_site
-        "satisfaction_mco_2020": ["finess", "region", "score_all_ajust"]
+        "deces_2019": ["date_deces", "region", "departement"],
+        "diagnostic": ["code_diag", "diagnostic"],
+        "professionnel_de_sante": ["identifiant", "profession"],
+        "etablissement_sante": ["finess_site", "region"],
+        "satisfaction_2019": ["finess", "region", "score_all_ajust"],
+        "mutuelle": ["id_mut", "nom_mutuelle"],
+        "medicaments": ["code_cip", "nom_medicament"],
+        "laboratoire": ["id_laboratoire", "nom_laboratoire"],
+        "salle": ["id_salle", "nom_salle"],
+        "specialites": ["code_specialite", "nom_specialite"]
     }
     
     print("🔍 VÉRIFICATION DES DONNÉES BRONZE")
@@ -860,7 +882,7 @@ def main_optimized():
     
     print(f"⚙️  Configuration corrigée:")
     print(f"   - Regex invalides CORRIGÉES")
-    print(f"   - 8 tables essentielles")
+    print(f"   - 12 tables complètes (alignement avec Silver)")
     print(f"   - Écriture sécurisée activée")
     print(f"   - Anonymisation RGPD-compliant")
     
@@ -871,14 +893,14 @@ def main_optimized():
             print("💥 Erreur connexion")
             sys.exit(1)
         
-        # CONFIGURATION OPTIMISÉE - 8 TABLES ESSENTIELLES SEULEMENT
+        # CONFIGURATION COMPLÈTE - 12 TABLES POUR ALIGNEMENT AVEC SILVER
         source_configs = [
     # === CORE DATA - PATIENTS ===
     {
         "type": "postgres",
         "source_name": "Patients",
         "path": "\"Patient\"",
-        "output_table": "patients",
+        "output_table": "patient",
         "encoding": "utf-8",
         "delimiter": ";",
         "pii_columns": ["nom", "prenom", "email", "tel", "num_secu", "adresse", "ville"],
@@ -893,7 +915,7 @@ def main_optimized():
         "type": "postgres",
         "source_name": "Consultations", 
         "path": "\"Consultation\"",
-        "output_table": "consultations",
+        "output_table": "consultation",
         "encoding": "utf-8", 
         "delimiter": ";",
         "pii_columns": [],
@@ -908,7 +930,7 @@ def main_optimized():
     "type": "postgres",
     "source_name": "Deces_2019",
     "path": "\"deces\"",
-    "output_table": "deces",
+    "output_table": "deces_2019",
     "encoding": "utf-8",
     "delimiter": ";",
     "pii_columns": ["nom", "prenom", "adresse", "ville"],
@@ -947,7 +969,7 @@ def main_optimized():
         "type": "postgres", 
         "source_name": "Diagnostics",
         "path": "\"Diagnostic\"",
-        "output_table": "diagnostics",
+        "output_table": "diagnostic",
         "encoding": "utf-8",
         "delimiter": ";",
         "pii_columns": [],
@@ -959,7 +981,7 @@ def main_optimized():
         "type": "postgres",
         "source_name": "Professionnels_Sante",
         "path": "\"Professionnel_de_sante\"", 
-        "output_table": "professionnels_sante",
+        "output_table": "professionnel_de_sante",
         "encoding": "utf-8",
         "delimiter": ";",
         "pii_columns": ["nom", "prenom"],
@@ -971,7 +993,7 @@ def main_optimized():
         "type": "csv",
         "source_name": "Etablissements", 
         "path": "file:///data/source/csv/etablissement_sante.csv",
-        "output_table": "etablissements",
+        "output_table": "etablissement_sante",
         "encoding": "utf-8",
         "delimiter": ";",
         "pii_columns": ["email", "telephone", "telephone_2", "adresse"],
@@ -988,7 +1010,7 @@ def main_optimized():
         "type": "csv",
         "source_name": "Satisfaction_MCO_2020",
         "path": "file:///data/source/csv/resultats-esatisca-mco-open-data-2020.csv",
-        "output_table": "satisfaction_mco_2020", 
+        "output_table": "satisfaction_mco_2020",  
         "encoding": "utf-8",
         "delimiter": ",",
         "pii_columns": [],
@@ -997,6 +1019,66 @@ def main_optimized():
             "score_avh_ajust", "score_acc_ajust", "score_pec_ajust", 
             "score_cer_ajust", "score_ovs_ajust", "taux_reco_brut"
         ]
+    },
+
+    # === REFERENCE DATA - MUTUELLE ===
+    {
+        "type": "postgres",
+        "source_name": "Mutuelle",
+        "path": "\"Mutuelle\"",
+        "output_table": "mutuelle",
+        "encoding": "utf-8",
+        "delimiter": ";",
+        "pii_columns": [],
+        "preserve_columns": ["id_mut", "nom_mutuelle", "type_mutuelle", "code_postal", "ville"]
+    },
+
+    # === REFERENCE DATA - MEDICAMENTS ===
+    {
+        "type": "postgres",
+        "source_name": "Medicaments",
+        "path": "\"Medicaments\"",
+        "output_table": "medicaments",
+        "encoding": "utf-8",
+        "delimiter": ";",
+        "pii_columns": [],
+        "preserve_columns": ["code_cip", "nom_medicament", "forme", "dosage", "prix", "laboratoire_id", "classe_therapeutique"]
+    },
+
+    # === REFERENCE DATA - LABORATOIRE ===
+    {
+        "type": "postgres",
+        "source_name": "Laboratoire",
+        "path": "\"Laboratoire\"",
+        "output_table": "laboratoire",
+        "encoding": "utf-8",
+        "delimiter": ";",
+        "pii_columns": [],
+        "preserve_columns": ["id_laboratoire", "nom_laboratoire", "adresse", "ville", "code_postal", "pays"]
+    },
+
+    # === REFERENCE DATA - SALLE ===
+    {
+        "type": "postgres",
+        "source_name": "Salle",
+        "path": "\"Salle\"",
+        "output_table": "salle",
+        "encoding": "utf-8",
+        "delimiter": ";",
+        "pii_columns": [],
+        "preserve_columns": ["id_salle", "nom_salle", "type_salle", "capacite", "etage", "batiment", "finess_site"]
+    },
+
+    # === REFERENCE DATA - SPECIALITES ===
+    {
+        "type": "postgres",
+        "source_name": "Specialites",
+        "path": "\"Specialites\"",
+        "output_table": "specialites",
+        "encoding": "utf-8",
+        "delimiter": ";",
+        "pii_columns": [],
+        "preserve_columns": ["code_specialite", "nom_specialite", "categorie", "description"]
     }
 ]
 
@@ -1020,7 +1102,7 @@ def main_optimized():
         print(f"\n🎉 PIPELINE BRONZE CORRIGÉ TERMINÉ")
         print(f"✅ Succès: {len(successful_tables)} tables")
         print(f"❌ Échecs: {len(failed_tables)} tables")
-        print(f"🎯 Tables essentielles: 8/8")
+        print(f"🎯 Tables complètes: 12/12")
         print(f"🔐 Anonymisation RGPD: ACTIVÉE")
         print(f"🔧 Regex corrigées: OUI")
         

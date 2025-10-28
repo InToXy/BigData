@@ -75,23 +75,33 @@ def list_all_gold_tables(spark):
         gold_path = f"s3a://{MINIO_CONFIG['bucket']}/"
         print(f"🔍 Recherche de TOUTES les tables Gold dans: {gold_path}")
         
-        # Liste des tables Gold attendues
+        # Liste des tables Gold attendues (mise à jour complète)
         expected_gold_tables = [
-            "dim_diagnostic",
-            "dim_etablissement", 
-            "dim_localisation",
-            "dim_patient",
-            "dim_professionnel",
+            # Dimensions
             "dim_temps",
+            "dim_patient",
+            "dim_diagnostic",
+            "dim_etablissement",
+            "dim_professionnel",
+            "dim_localisation",
+            "dim_mutuelle",
+            "dim_medicaments",
+            "dim_laboratoire",
+            "dim_salle",
+            "dim_specialites",
+            # Tables de faits
             "fact_consultation",
-            "fact_deces",
             "fact_hospitalisation",
+            "fact_deces",
+            "fact_prescription",
+            # Data Marts
+            "mart_performance_etablissement",
             "mart_diagnostic_epidemio",
             "mart_demographie",
             "mart_professionnel",
-            "mart_satisfaction_region_2020",
             "mart_deces_localisation_2019",
-            "mart_performance_etablissement",
+            "mart_satisfaction_region_2020",
+            "mart_superset_consolide",
         ]
         
         found_tables = []

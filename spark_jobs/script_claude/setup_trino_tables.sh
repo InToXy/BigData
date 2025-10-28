@@ -13,7 +13,7 @@
   # ============================================================
   # ÉTAPE 2: Copier et exécuter le script SQL
   # ============================================================
-  cd ../tmp
+  cd spark_jobs/tmp/
   docker cp create_all_gold_tables.sql chu_trino:/tmp/
   docker exec chu_trino bash -c "trino < /tmp/create_all_gold_tables.sql"
 

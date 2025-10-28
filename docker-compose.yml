@@ -32,6 +32,7 @@ services:
       /usr/bin/mc mb myminio/bronze || true;
       /usr/bin/mc mb myminio/silver || true;
       /usr/bin/mc mb myminio/gold || true;
+      /usr/bin/mc mb myminio/warehouse || true;
       /usr/bin/mc mb myminio/airflow-logs || true;
       echo 'Buckets MinIO créés';
       exit 0;
@@ -213,6 +214,47 @@ services:
       - bigdata_network
     restart: unless-stopped
 
+  # # ============================================================
+  # # HIVE METASTORE
+  # # ============================================================
+  # metastore-postgres:
+  #   image: postgres:13
+  #   container_name: chu_metastore_postgres
+  #   environment:
+  #     POSTGRES_DB: metastore_db
+  #     POSTGRES_USER: metastore_user
+  #     POSTGRES_PASSWORD: metastore_password
+  #   volumes:
+  #     - metastore_postgres_data:/var/lib/postgresql/data
+  #     - ./docker/metastore/init.sql:/docker-entrypoint-initdb.d/init.sql
+  #   ports:
+  #     - "5433:5432"
+  #   networks:
+  #     - bigdata_network
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U metastore_user -d metastore_db"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+  # hive-metastore:
+  #   build: ./docker/metastore
+  #   container_name: chu_hive_metastore
+  #   environment:
+  #     METASTORE_DB_HOSTNAME: metastore-postgres
+  #     METASTORE_TYPE: postgres
+  #   ports:
+  #     - "9083:9083"
+  #   depends_on:
+  #     metastore-postgres:
+  #       condition: service_healthy
+  #     minio:
+  #       condition: service_started
+  #   networks:
+  #     - bigdata_network
+  #   restart: unless-stopped
+
   # ============================================================
   # SUPERSET
   # ============================================================
@@ -243,6 +285,7 @@ services:
       restart: "no"
       command: |
         bash -c "
+          pip install trino[sqlalchemy]
           echo 'Initialisation de Superset...'
           sleep 15
           superset db upgrade
@@ -266,7 +309,7 @@ services:
     networks:
       - bigdata_network
     restart: unless-stopped
-    command: /usr/bin/run-server.sh
+    command: bash -c "pip install trino[sqlalchemy] && /usr/bin/run-server.sh"
 # ============================================================
 volumes:
   minio_data:

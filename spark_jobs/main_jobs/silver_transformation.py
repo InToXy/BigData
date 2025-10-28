@@ -68,6 +68,14 @@ def compute_quality_metrics(df, table_name):
 def get_spark_session():
     """Session Spark optimisée pour le traitement Silver."""
     try:
+        # Charger les JARs nécessaires
+        jars_dir = "/home/jovyan/jars"
+        if os.path.exists(jars_dir):
+            jar_files = [f for f in os.listdir(jars_dir) if f.endswith('.jar')]
+            jars_path = ",".join([f"{jars_dir}/{jar}" for jar in jar_files])
+        else:
+            jars_path = ""
+
         builder = SparkSession.builder \
             .appName("Silver Layer Processor") \
             .config("spark.sql.adaptive.enabled", "true") \
@@ -86,6 +94,9 @@ def get_spark_session():
             .config("spark.sql.shuffle.partitions", "8") \
             .config("spark.driver.memory", "2g") \
             .config("spark.executor.memory", "2g")
+        
+        if jars_path:
+            builder = builder.config("spark.jars", jars_path)
 
         spark = builder.getOrCreate()
         spark.sparkContext.setLogLevel("WARN")
@@ -189,11 +200,37 @@ def create_silver_patients(bronze_patients, bronze_consultations, bronze_hospita
         .withColumn("patient_hospitalise", 
             when(col("nb_hospitalisations_total").isNotNull(), True).otherwise(False)
         ) \
+        .withColumn("categorie_age",
+            when(col("age") < 18, "0-17")
+            .when(col("age") < 30, "18-29")
+            .when(col("age") < 45, "30-44")
+            .when(col("age") < 60, "45-59")
+            .when(col("age") < 75, "60-74")
+            .otherwise("75+")
+        ) \
         .withColumn("segment_patient",
             when((col("age") < 18) & (col("nb_consultations_total") > 5), "Jeune_Frequent")
             .when((col("age") >= 65) & (col("nb_hospitalisations_total") > 0), "Senior_Hospitalise")
             .when(col("statut_activite") == "Frequents", "Patient_Chronique")
             .otherwise("Standard")
+        ) \
+        .withColumn("region_code", when(col("code_postal").isNotNull(), regexp_extract(col("code_postal"), r"^(\d{2})", 1)).otherwise("00")) \
+        .withColumn("patient_region",
+            when(col("region_code").isin(["75", "77", "78", "91", "92", "93", "94", "95"]), "Ile-de-France")
+            .when(col("region_code").isin(["14", "27", "50", "61", "76"]), "Normandie")
+            .when(col("region_code").isin(["02", "59", "60", "62", "80"]), "Hauts-de-France")
+            .when(col("region_code").isin(["35", "22", "56", "29"]), "Bretagne")
+            .when(col("region_code").isin(["44", "49", "53", "72", "85"]), "Pays de la Loire")
+            .when(col("region_code").isin(["17", "16", "79", "86", "87"]), "Nouvelle-Aquitaine")
+            .when(col("region_code").isin(["33", "24", "40", "47", "64"]), "Nouvelle-Aquitaine")
+            .when(col("region_code").isin(["31", "09", "11", "12", "32", "34", "46", "48", "65", "66", "81", "82"]), "Occitanie")
+            .when(col("region_code").isin(["69", "42", "43", "63", "03", "15", "07", "26", "38", "73", "74"]), "Auvergne-Rhône-Alpes")
+            .when(col("region_code").isin(["21", "25", "39", "58", "70", "71", "89", "90"]), "Bourgogne-Franche-Comté")
+            .when(col("region_code").isin(["54", "55", "57", "88"]), "Grand Est")
+            .when(col("region_code").isin(["51", "08", "10", "52"]), "Grand Est")
+            .when(col("region_code").isin(["18", "28", "36", "37", "41", "45"]), "Centre-Val de Loire")
+            .when(col("region_code").isin(["97"]), "Outre-Mer")
+            .otherwise("Autre")
         ) \
         .fillna({
             "nb_consultations_total": 0,
@@ -209,7 +246,7 @@ def create_silver_patients(bronze_patients, bronze_consultations, bronze_hospita
     return silver_patients
 
 @log_transformation
-def create_silver_consultations(bronze_consultations, bronze_patients, bronze_diagnostics, bronze_professionnels, bronze_etablissements):
+def create_silver_consultations(bronze_consultations, silver_patients, bronze_diagnostics, bronze_professionnels, bronze_etablissements):
     """Crée la table Silver des consultations enrichie avec lien établissement."""
     
     # Conversion des types de données pour les heures
@@ -218,30 +255,7 @@ def create_silver_consultations(bronze_consultations, bronze_patients, bronze_di
         .withColumn("heure_fin_timestamp", col("heure_fin").cast("timestamp")) \
         .alias("c")
     
-    # Extraction de la région à partir du code postal (2 premiers chiffres)
-    patients_clean = bronze_patients.withColumn(
-        "region_code", 
-        when(col("code_postal").isNotNull(), 
-             regexp_extract(col("code_postal"), r"^(\d{2})", 1))
-        .otherwise("00")
-    ).withColumn(
-        "patient_region",
-        when(col("region_code").isin(["75", "77", "78", "91", "92", "93", "94", "95"]), "Ile-de-France")
-        .when(col("region_code").isin(["14", "27", "50", "61", "76"]), "Normandie")
-        .when(col("region_code").isin(["02", "59", "60", "62", "80"]), "Hauts-de-France")
-        .when(col("region_code").isin(["35", "22", "56", "29"]), "Bretagne")
-        .when(col("region_code").isin(["44", "49", "53", "72", "85"]), "Pays de la Loire")
-        .when(col("region_code").isin(["17", "16", "79", "86", "87"]), "Nouvelle-Aquitaine")
-        .when(col("region_code").isin(["33", "24", "40", "47", "64"]), "Nouvelle-Aquitaine")
-        .when(col("region_code").isin(["31", "09", "11", "12", "32", "34", "46", "48", "65", "66", "81", "82"]), "Occitanie")
-        .when(col("region_code").isin(["69", "42", "43", "63", "03", "15", "07", "26", "38", "73", "74"]), "Auvergne-Rhône-Alpes")
-        .when(col("region_code").isin(["21", "25", "39", "58", "70", "71", "89", "90"]), "Bourgogne-Franche-Comté")
-        .when(col("region_code").isin(["54", "55", "57", "88"]), "Grand Est")
-        .when(col("region_code").isin(["51", "08", "10", "52"]), "Grand Est")
-        .when(col("region_code").isin(["18", "28", "36", "37", "41", "45"]), "Centre-Val de Loire")
-        .when(col("region_code").isin(["97"]), "Outre-Mer")
-        .otherwise("Autre")
-    ).select(
+    patients_clean = silver_patients.select(
         "_sk_patient", 
         col("sexe").alias("patient_sexe"),
         "age", 
@@ -270,11 +284,29 @@ def create_silver_consultations(bronze_consultations, bronze_patients, bronze_di
         "categorie_professionnelle"
     ).alias("prof")
     
-    # ✅ AJOUT : Lien établissement via région (solution temporaire)
+    # ✅ AJOUT : Lien établissement via région (extraite du code postal)
     etablissement_par_region = bronze_etablissements \
+        .withColumn("region_code", 
+            when(col("code_postal").isNotNull(), 
+                 regexp_extract(col("code_postal"), r"^(\d{2})", 1))
+            .otherwise("00")
+        ).withColumn("region",
+            when(col("region_code").isin(["75", "77", "78", "91", "92", "93", "94", "95"]), "Ile-de-France")
+            .when(col("region_code").isin(["14", "27", "50", "61", "76"]), "Normandie") 
+            .when(col("region_code").isin(["02", "59", "60", "62", "80"]), "Hauts-de-France")
+            .when(col("region_code").isin(["35", "22", "56", "29"]), "Bretagne")
+            .when(col("region_code").isin(["44", "49", "53", "72", "85"]), "Pays de la Loire")
+            .when(col("region_code").isin(["17", "16", "79", "86", "87"]), "Nouvelle-Aquitaine")
+            .when(col("region_code").isin(["33", "24", "40", "47", "64"]), "Nouvelle-Aquitaine")
+            .when(col("region_code").isin(["31", "09", "11", "12", "32", "34", "46", "48", "65", "66", "81", "82"]), "Occitanie")
+            .when(col("region_code").isin(["69", "42", "43", "63", "03", "15", "07", "26", "38", "73", "74"]), "Auvergne-Rhône-Alpes")
+            .when(col("region_code").isin(["21", "25", "39", "58", "70", "71", "89", "90"]), "Bourgogne-Franche-Comté")
+            .when(col("region_code").isin(["54", "55", "57", "88"]), "Grand Est")
+            .otherwise("Autre")
+        ) \
         .groupBy("region") \
         .agg(
-            first("finess_site").alias("finess_principal"),
+            first("finess").alias("finess_principal"),
             first("raison_sociale_site").alias("raison_sociale_principal")
         ).alias("etab")
     
@@ -283,7 +315,7 @@ def create_silver_consultations(bronze_consultations, bronze_patients, bronze_di
         .join(patients_clean, col("c._sk_patient") == col("p._sk_patient"), "left") \
         .join(diagnostics_clean, col("c._sk_diagnostic") == col("d._sk"), "left") \
         .join(professionnels_clean, 
-              col("c.id_prof_sante") == col("prof.identifiant"), "left") \
+              col("c._sk_professionnel") == col("prof._sk"), "left") \
         .join(etablissement_par_region,
               col("p.patient_region") == col("etab.region"), "left") \
         .select(
@@ -328,7 +360,7 @@ def create_silver_consultations(bronze_consultations, bronze_patients, bronze_di
     return silver_consultations
 
 @log_transformation
-def create_silver_hospitalisations(bronze_hospitalisations, bronze_patients, bronze_diagnostics, bronze_etablissements):
+def create_silver_hospitalisations(bronze_hospitalisations, silver_patients, bronze_diagnostics, bronze_etablissements):
     """Crée la table Silver des hospitalisations enrichie."""
     
     # Conversion des types de données
@@ -336,30 +368,7 @@ def create_silver_hospitalisations(bronze_hospitalisations, bronze_patients, bro
         .withColumn("jour_hospitalisation", col("jour_hospitalisation").cast("integer")) \
         .alias("h")
     
-    # Extraction de la région à partir du code postal (2 premiers chiffres)
-    patients_clean = bronze_patients.withColumn(
-        "region_code", 
-        when(col("code_postal").isNotNull(), 
-             regexp_extract(col("code_postal"), r"^(\d{2})", 1))
-        .otherwise("00")
-    ).withColumn(
-        "patient_region",
-        when(col("region_code").isin(["75", "77", "78", "91", "92", "93", "94", "95"]), "Ile-de-France")
-        .when(col("region_code").isin(["14", "27", "50", "61", "76"]), "Normandie")
-        .when(col("region_code").isin(["02", "59", "60", "62", "80"]), "Hauts-de-France")
-        .when(col("region_code").isin(["35", "22", "56", "29"]), "Bretagne")
-        .when(col("region_code").isin(["44", "49", "53", "72", "85"]), "Pays de la Loire")
-        .when(col("region_code").isin(["17", "16", "79", "86", "87"]), "Nouvelle-Aquitaine")
-        .when(col("region_code").isin(["33", "24", "40", "47", "64"]), "Nouvelle-Aquitaine")
-        .when(col("region_code").isin(["31", "09", "11", "12", "32", "34", "46", "48", "65", "66", "81", "82"]), "Occitanie")
-        .when(col("region_code").isin(["69", "42", "43", "63", "03", "15", "07", "26", "38", "73", "74"]), "Auvergne-Rhône-Alpes")
-        .when(col("region_code").isin(["21", "25", "39", "58", "70", "71", "89", "90"]), "Bourgogne-Franche-Comté")
-        .when(col("region_code").isin(["54", "55", "57", "88"]), "Grand Est")
-        .when(col("region_code").isin(["51", "08", "10", "52"]), "Grand Est")
-        .when(col("region_code").isin(["18", "28", "36", "37", "41", "45"]), "Centre-Val de Loire")
-        .when(col("region_code").isin(["97"]), "Outre-Mer")
-        .otherwise("Autre")
-    ).select(
+    patients_clean = silver_patients.select(
         "_sk_patient", 
         col("sexe").alias("patient_sexe"),
         "age", 
@@ -367,19 +376,40 @@ def create_silver_hospitalisations(bronze_hospitalisations, bronze_patients, bro
         "patient_region"
     ).alias("p")
     
-    # Préparer les données des établissements
-    etablissements_clean = bronze_etablissements.select(
+    # Préparer les données des établissements avec région extraite du code postal
+    etablissements_with_region = bronze_etablissements \
+        .withColumn("region_code", 
+            when(col("code_postal").isNotNull(), 
+                 regexp_extract(col("code_postal"), r"^(\d{2})", 1))
+            .otherwise("00")
+        ).withColumn("region",
+            when(col("region_code").isin(["75", "77", "78", "91", "92", "93", "94", "95"]), "Ile-de-France")
+            .when(col("region_code").isin(["14", "27", "50", "61", "76"]), "Normandie") 
+            .when(col("region_code").isin(["02", "59", "60", "62", "80"]), "Hauts-de-France")
+            .when(col("region_code").isin(["35", "22", "56", "29"]), "Bretagne")
+            .when(col("region_code").isin(["44", "49", "53", "72", "85"]), "Pays de la Loire")
+            .when(col("region_code").isin(["17", "16", "79", "86", "87"]), "Nouvelle-Aquitaine")
+            .when(col("region_code").isin(["33", "24", "40", "47", "64"]), "Nouvelle-Aquitaine")
+            .when(col("region_code").isin(["31", "09", "11", "12", "32", "34", "46", "48", "65", "66", "81", "82"]), "Occitanie")
+            .when(col("region_code").isin(["69", "42", "43", "63", "03", "15", "07", "26", "38", "73", "74"]), "Auvergne-Rhône-Alpes")
+            .when(col("region_code").isin(["21", "25", "39", "58", "70", "71", "89", "90"]), "Bourgogne-Franche-Comté")
+            .when(col("region_code").isin(["54", "55", "57", "88"]), "Grand Est")
+            .otherwise("Autre")
+        )
+    
+    etablissements_clean = etablissements_with_region.select(
         "_sk",
-        "finess_site", 
-        "raison_sociale_site", 
-        col("region").alias("etablissement_region"), 
+        "identifiant_organisation",
+        "finess",
+        "raison_sociale_site",
+        col("region").alias("etablissement_region"),
         "code_postal"
     ).alias("e")
-    
+
     # Préparer les diagnostics
     diagnostics_clean = bronze_diagnostics.select(
         "_sk",
-        "code_diag", 
+        "code_diag",
         "diagnostic"
     ).withColumn(
         "type_hospitalisation",
@@ -389,15 +419,17 @@ def create_silver_hospitalisations(bronze_hospitalisations, bronze_patients, bro
         .when(col("diagnostic").rlike("(?i)chirurgie|operation"), "Chirurgical")
         .otherwise("Medical")
     ).alias("d")
-    
-    # Construction de la table silver avec des sélections explicites et jointures sur _sk
+
+    # Construction de la table silver avec des sélections explicites et jointures
+    # ✅ CORRECTION: Jointure sur identifiant_organisation au lieu de _sk_etablissement
     silver_hospitalisations = bronze_hospitalisations_clean \
         .join(patients_clean, col("h._sk_patient") == col("p._sk_patient"), "left") \
         .join(diagnostics_clean, col("h._sk_diagnostic") == col("d._sk"), "left") \
-        .join(etablissements_clean, 
-              col("h._sk_etablissement") == col("e._sk"), "left") \
+        .join(etablissements_clean,
+              col("h.identifiant_organisation") == col("e.identifiant_organisation"), "left") \
         .select(
             col("h.*"),
+            # ✅ _sk_etablissement existe déjà dans Bronze h.*, pas besoin de le rajouter
             col("p.patient_sexe"),
             col("p.age"),
             col("p.categorie_age"),
@@ -453,6 +485,24 @@ def create_silver_deces(bronze_deces):
         )
     
     silver_deces = bronze_deces_with_age \
+        .withColumn("departement_deces", when(col("code_lieu_deces").isNotNull(), regexp_extract(col("code_lieu_deces"), r"^(\d{2})", 1)).otherwise("00")) \
+        .withColumn("region_deces",
+            when(col("departement_deces").isin(["75", "77", "78", "91", "92", "93", "94", "95"]), "Ile-de-France")
+            .when(col("departement_deces").isin(["14", "27", "50", "61", "76"]), "Normandie")
+            .when(col("departement_deces").isin(["02", "59", "60", "62", "80"]), "Hauts-de-France")
+            .when(col("departement_deces").isin(["35", "22", "56", "29"]), "Bretagne")
+            .when(col("departement_deces").isin(["44", "49", "53", "72", "85"]), "Pays de la Loire")
+            .when(col("departement_deces").isin(["17", "16", "79", "86", "87"]), "Nouvelle-Aquitaine")
+            .when(col("departement_deces").isin(["33", "24", "40", "47", "64"]), "Nouvelle-Aquitaine")
+            .when(col("departement_deces").isin(["31", "09", "11", "12", "32", "34", "46", "48", "65", "66", "81", "82"]), "Occitanie")
+            .when(col("departement_deces").isin(["69", "42", "43", "63", "03", "15", "07", "26", "38", "73", "74"]), "Auvergne-Rhône-Alpes")
+            .when(col("departement_deces").isin(["21", "25", "39", "58", "70", "71", "89", "90"]), "Bourgogne-Franche-Comté")
+            .when(col("departement_deces").isin(["54", "55", "57", "88"]), "Grand Est")
+            .when(col("departement_deces").isin(["51", "08", "10", "52"]), "Grand Est")
+            .when(col("departement_deces").isin(["18", "28", "36", "37", "41", "45"]), "Centre-Val de Loire")
+            .when(col("departement_deces").isin(["97"]), "Outre-Mer")
+            .otherwise("Autre")
+        ) \
         .withColumn("esperance_vie_atteinte",
             when(col("age") >= 80, "Longevite")
             .when(col("age") >= 65, "Retraite")
@@ -465,8 +515,6 @@ def create_silver_deces(bronze_deces):
             .when(month(col("date_deces")).isin([6, 7, 8]), "Ete")
             .otherwise("Automne")
         ) \
-        .withColumn("region_deces", col("region")) \
-        .withColumn("departement_deces", col("departement")) \
         .withColumn("tranche_age_deces",
             when(col("age") < 1, "0-1 an")
             .when(col("age") < 18, "1-17 ans")
@@ -516,10 +564,10 @@ def create_silver_etablissements(bronze_etablissements, bronze_hospitalisations,
     # Construction finale avec vraies statistiques
     silver_etablissements = bronze_etablissements.alias("etab") \
         .join(hospitalisations_par_etablissement,
-              col("etab.finess_site") == col("hosp_stats.finess_hospit"),
+              col("etab.finess") == col("hosp_stats.finess_hospit"),
               "left") \
         .join(satisfaction_par_etablissement,
-              col("etab.finess_site") == col("sat_stats.finess_satisf"),
+              col("etab.finess") == col("sat_stats.finess_satisf"),
               "left") \
         .select(
             col("etab.*"),
@@ -732,6 +780,172 @@ def create_silver_satisfaction(bronze_satisfaction):
     return silver_satisfaction
 
 @log_transformation
+def create_silver_mutuelle(bronze_mutuelle):
+    """Crée la table Silver des mutuelles."""
+    print("\n🏥 Création SILVER_MUTUELLE...")
+
+    # ✅ CORRECTION: Utiliser uniquement les colonnes disponibles dans Bronze
+    # Les colonnes bronze_mutuelle sont: _sk, _hash_record, id_mut, nom, adresse
+    silver_mutuelle = bronze_mutuelle \
+        .withColumn("type_mutuelle",
+            when(col("nom").rlike("(?i)agirc|arrco|retraite"), "Retraite")
+            .when(col("nom").rlike("(?i)etudiant|jeune"), "Étudiante")
+            .when(col("nom").rlike("(?i)sante|medical"), "Santé")
+            .when(col("nom").rlike("(?i)entreprise|salarie"), "Entreprise")
+            .otherwise("Générale")
+        )
+
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_mutuelle, "silver_mutuelle")
+
+    return silver_mutuelle
+
+@log_transformation
+def create_silver_medicaments(bronze_medicaments):
+    """Crée la table Silver des médicaments."""
+    print("\n💊 Création SILVER_MEDICAMENTS...")
+
+    # ✅ CORRECTION: Utiliser uniquement les colonnes disponibles dans Bronze
+    # Colonnes disponibles: code_cis, denomination, forme_pharmaceutique,
+    # voies_d_administration, statut_administratif, titulaire, etc.
+    silver_medicaments = bronze_medicaments \
+        .withColumn("classe_therapeutique",
+            when(col("denomination").rlike("(?i)antibio|amoxicilline|penicilline"), "Antibiotique")
+            .when(col("denomination").rlike("(?i)antalgique|doliprane|paracetamol|ibuprofene"), "Antalgique")
+            .when(col("denomination").rlike("(?i)antiinflammatoire|cortisone"), "Anti-inflammatoire")
+            .when(col("denomination").rlike("(?i)cardio|beta|atenolol"), "Cardiovasculaire")
+            .when(col("denomination").rlike("(?i)psycho|antidepresseur"), "Psychotrope")
+            .otherwise("Autre")
+        ) \
+        .withColumn("disponibilite",
+            when(col("etat_de_commercialisation") == "Commercialisee", "Disponible")
+            .when(col("etat_de_commercialisation").rlike("(?i)arret"), "Arrêté")
+            .otherwise("Non disponible")
+        )
+
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_medicaments, "silver_medicaments")
+
+    return silver_medicaments
+
+@log_transformation
+def create_silver_laboratoire(bronze_laboratoire):
+    """Crée la table Silver des laboratoires."""
+    print("\n🔬 Création SILVER_LABORATOIRE...")
+
+    # ✅ CORRECTION: Utiliser uniquement les colonnes disponibles dans Bronze
+    # Colonnes disponibles: id_labo, laboratoire, pays
+    silver_laboratoire = bronze_laboratoire \
+        .withColumn("zone_geographique",
+            when(col("pays") == "France", "France")
+            .when(col("pays").isin(["ALLEMAGNE", "Allemagne", "ITALIE", "ESPAGNE"]), "Europe")
+            .when(col("pays").isin(["USA", "ETATS-UNIS", "CANADA"]), "Amérique du Nord")
+            .when(col("pays").isNotNull(), "International")
+            .otherwise("Non défini")
+        ) \
+        .withColumn("type_laboratoire",
+            when(col("laboratoire").rlike("(?i)sanofi|pfizer|novartis|roche"), "Grand groupe")
+            .when(col("laboratoire").rlike("(?i)generique|arrow|biogaran|teva"), "Génériques")
+            .otherwise("Spécialisé")
+        )
+
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_laboratoire, "silver_laboratoire")
+
+    return silver_laboratoire
+
+@log_transformation
+def create_silver_salle(bronze_salle):
+    """Crée la table Silver des salles."""
+    print("\n🏥 Création SILVER_SALLE...")
+
+    # ✅ CORRECTION: Utiliser uniquement les colonnes disponibles dans Bronze
+    # Colonnes disponibles: id_salle, num_consultation, code_bloc, num_etage, num_salle
+    silver_salle = bronze_salle \
+        .withColumn("type_salle",
+            when(col("code_bloc").rlike("(?i)bloc-[a-c]"), "Chirurgical")
+            .when(col("code_bloc").rlike("(?i)bloc-[d-f]"), "Consultation")
+            .otherwise("Standard")
+        ) \
+        .withColumn("categorie_etage",
+            when(col("num_etage") == "Etage-0", "Rez-de-chaussée")
+            .when(col("num_etage") == "Etage-1", "Premier étage")
+            .when(col("num_etage").rlike("Etage-[23]"), "Étages intermédiaires")
+            .otherwise("Étages supérieurs")
+        )
+
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_salle, "silver_salle")
+
+    return silver_salle
+
+@log_transformation
+def create_silver_specialites(bronze_specialites):
+    """Crée la table Silver des spécialités."""
+    print("\n🎯 Création SILVER_SPECIALITES...")
+
+    # ✅ CORRECTION: Utiliser uniquement les colonnes disponibles dans Bronze
+    # Colonnes disponibles: code_specialite, fonction, specialite
+    silver_specialites = bronze_specialites \
+        .withColumn("domaine_medical",
+            when(col("specialite").rlike("(?i)chirurg"), "Chirurgie")
+            .when(col("specialite").rlike("(?i)cardio"), "Cardiologie")
+            .when(col("specialite").rlike("(?i)pedia|pediatr"), "Pédiatrie")
+            .when(col("specialite").rlike("(?i)onco|cancer"), "Oncologie")
+            .when(col("specialite").rlike("(?i)anesthes"), "Anesthésiologie")
+            .when(col("specialite").rlike("(?i)gynec|obstet"), "Gynécologie")
+            .otherwise("Autre")
+        ) \
+        .withColumn("categorie_fonction",
+            when(col("fonction") == "Medecin", "Médical")
+            .when(col("fonction").rlike("(?i)infirmier|aide"), "Paramédical")
+            .when(col("fonction").rlike("(?i)pharmacien"), "Pharmacie")
+            .otherwise("Autre")
+        )
+
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_specialites, "silver_specialites")
+
+    return silver_specialites
+
+@log_transformation
+def create_silver_satisfaction(bronze_satisfaction):
+    """Crée la table Silver des données de satisfaction."""
+    print("\n😊 Création SILVER_SATISFACTION...")
+
+    # La table satisfaction est déjà bien structurée dans Bronze
+    # On ajoute juste quelques enrichissements
+    silver_satisfaction = bronze_satisfaction \
+        .withColumn("niveau_satisfaction",
+            when(col("score_all_ajust") >= 85, "Excellente")
+            .when(col("score_all_ajust") >= 75, "Très Bonne")
+            .when(col("score_all_ajust") >= 65, "Bonne")
+            .when(col("score_all_ajust") >= 50, "Satisfaisante")
+            .otherwise("À améliorer")
+        ) \
+        .withColumn("performance_relative",
+            when(col("classement") == "A", "Au dessus des attentes")
+            .when(col("classement") == "B", "Conforme aux attentes")
+            .when(col("classement") == "C", "En dessous des attentes")
+            .otherwise("Non classé")
+        ) \
+        .withColumn("taux_participation_categorise",
+            when(col("participation") == "1- Obligatoire", "Obligatoire")
+            .when(col("participation") == "2- Volontaire", "Volontaire")
+            .otherwise("Non défini")
+        ) \
+        .withColumn("score_global_normalise",
+            when(col("score_all_ajust").isNotNull(),
+                 col("score_all_ajust") / 100.0)
+            .otherwise(0.0)
+        )
+
+    # Calcul des métriques de qualité
+    compute_quality_metrics(silver_satisfaction, "silver_satisfaction")
+
+    return silver_satisfaction
+
+@log_transformation
 def create_silver_indicators_metier(silver_consultations, silver_hospitalisations, silver_deces, silver_satisfaction):
     """Crée la table Silver des indicateurs métier agrégés."""
     
@@ -806,60 +1020,76 @@ def main():
         # Initialisation Spark
         spark = get_spark_session()
         
-        # Lecture des données Bronze
-        print("📥 Lecture des données Bronze...")
-        bronze_patients = read_bronze_table(spark, "patients")
-        bronze_consultations = read_bronze_table(spark, "consultations")
+        print("\n📥 Lecture des données Bronze...")
+        # Tables principales (noms au singulier dans Bronze)
+        bronze_patients = read_bronze_table(spark, "patient")
+        bronze_consultations = read_bronze_table(spark, "consultation")
         bronze_hospitalisations = read_bronze_table(spark, "hospitalisations")
-        bronze_deces = read_bronze_table(spark, "deces")
-        bronze_etablissements = read_bronze_table(spark, "etablissements")
-        bronze_professionnels = read_bronze_table(spark, "professionnels_sante")
-        bronze_diagnostics = read_bronze_table(spark, "diagnostics")
+        bronze_deces = read_bronze_table(spark, "deces_2019")
+        bronze_etablissements = read_bronze_table(spark, "etablissement_sante")
+        bronze_professionnels = read_bronze_table(spark, "professionnel_de_sante")
+        bronze_diagnostics = read_bronze_table(spark, "diagnostic")
         bronze_satisfaction = read_bronze_table(spark, "satisfaction_mco_2020")
         
-        # Création des tables Silver
+        # Tables de référence
+        bronze_mutuelle = read_bronze_table(spark, "mutuelle")
+        bronze_medicaments = read_bronze_table(spark, "medicaments")
+        bronze_laboratoire = read_bronze_table(spark, "laboratoire")
+        bronze_salle = read_bronze_table(spark, "salle")
+        bronze_specialites = read_bronze_table(spark, "specialites")
+
         print("\n🏗️  Construction des tables Silver...")
-        
+        # Tables principales
         silver_patients = create_silver_patients(bronze_patients, bronze_consultations, bronze_hospitalisations)
-        silver_consultations = create_silver_consultations(bronze_consultations, bronze_patients, bronze_diagnostics, bronze_professionnels, bronze_etablissements)
-        silver_hospitalisations = create_silver_hospitalisations(bronze_hospitalisations, bronze_patients, bronze_diagnostics, bronze_etablissements)
+        silver_consultations = create_silver_consultations(bronze_consultations, silver_patients, bronze_diagnostics, bronze_professionnels, bronze_etablissements)
+        silver_hospitalisations = create_silver_hospitalisations(bronze_hospitalisations, silver_patients, bronze_diagnostics, bronze_etablissements)
         silver_deces = create_silver_deces(bronze_deces)
         silver_etablissements = create_silver_etablissements(bronze_etablissements, bronze_hospitalisations, bronze_satisfaction)
         silver_professionnels = create_silver_professionnels(bronze_professionnels, bronze_consultations)
         silver_diagnostics = create_silver_diagnostics(bronze_diagnostics, bronze_consultations, bronze_hospitalisations)
         silver_satisfaction = create_silver_satisfaction(bronze_satisfaction)
-        silver_indicators_metier = create_silver_indicators_metier(silver_consultations, silver_hospitalisations, silver_deces, silver_satisfaction)
-        
-        # Écriture des tables Silver
+
+        # Tables de référence
+        silver_mutuelle = create_silver_mutuelle(bronze_mutuelle)
+        silver_medicaments = create_silver_medicaments(bronze_medicaments)
+        silver_laboratoire = create_silver_laboratoire(bronze_laboratoire)
+        silver_salle = create_silver_salle(bronze_salle)
+        silver_specialites = create_silver_specialites(bronze_specialites)
+
+        # Indicateurs métier
+        silver_indicators = create_silver_indicators_metier(silver_consultations, silver_hospitalisations, silver_deces, silver_satisfaction)
+
         print("\n💾 Écriture des tables Silver...")
-        write_silver_table(silver_patients, "patients")
-        write_silver_table(silver_consultations, "consultations", ["date_consultation_annee", "date_consultation_mois"])
-        write_silver_table(silver_hospitalisations, "hospitalisations", ["date_admission_annee", "date_admission_mois"])
-        write_silver_table(silver_deces, "deces", ["date_deces_annee", "date_deces_mois"])
-        write_silver_table(silver_etablissements, "etablissements")
-        write_silver_table(silver_professionnels, "professionnels_sante")
-        write_silver_table(silver_diagnostics, "diagnostics")
+        # Tables principales (noms cohérents avec Gold)
+        write_silver_table(silver_patients, "patient")
+        write_silver_table(silver_consultations, "consultation")
+        write_silver_table(silver_hospitalisations, "hospitalisations")
+        write_silver_table(silver_deces, "deces_2019")
+        write_silver_table(silver_etablissements, "etablissement_sante")
+        write_silver_table(silver_professionnels, "professionnel_de_sante")
+        write_silver_table(silver_diagnostics, "diagnostic")
         write_silver_table(silver_satisfaction, "satisfaction")
-        write_silver_table(silver_indicators_metier, "indicators_metier", ["type_indicateur", "annee"])
-        
+
+        # Tables de référence
+        write_silver_table(silver_mutuelle, "mutuelle")
+        write_silver_table(silver_medicaments, "medicaments")
+        write_silver_table(silver_laboratoire, "laboratoire")
+        write_silver_table(silver_salle, "salle")
+        write_silver_table(silver_specialites, "specialites")
+
+        # Indicateurs
+        write_silver_table(silver_indicators, "indicators_metier")
+
         # Rapport final
-        print(f"""
+        print("""
     🎉 PIPELINE SILVER TERMINÉ AVEC SUCCÈS!
 
     📊 TABLES SILVER CRÉÉES:
-    ✅ silver_patients: {silver_patients.count():,} lignes
-    ✅ silver_consultations: {silver_consultations.count():,} lignes  
-    ✅ silver_hospitalisations: {silver_hospitalisations.count():,} lignes
-    ✅ silver_deces: {silver_deces.count():,} lignes
-    ✅ silver_etablissements: {silver_etablissements.count():,} lignes
-    ✅ silver_professionnels: {silver_professionnels.count():,} lignes
-    ✅ silver_diagnostics: {silver_diagnostics.count():,} lignes
-    ✅ silver_satisfaction: {silver_satisfaction.count():,} lignes
-    ✅ silver_indicators_metier: {silver_indicators_metier.count():,} lignes
+    ✅ Toutes les tables principales et de référence
 
     🎯 INDICATEURS PRÉPARÉS:
-    • Taux de consultation par établissement (✅ LIEN AJOUTÉ)
-    • Taux d'hospitalisation par diagnostic  
+    • Taux de consultation par établissement
+    • Taux d'hospitalisation par diagnostic
     • Décès par région et âge
     • Satisfaction par établissement
     • Performance des professionnels
@@ -872,14 +1102,15 @@ def main():
 
     🚀 PRÊT POUR LE LAYER GOLD!
         """)
-        
+
         spark.stop()
-        
+
     except Exception as e:
         print(f"💥 Erreur pipeline Silver: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
