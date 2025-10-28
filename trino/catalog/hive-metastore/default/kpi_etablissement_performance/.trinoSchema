@@ -1,0 +1,35 @@
+{
+  "writerVersion" : "435",
+  "owner" : "trino",
+  "tableType" : "EXTERNAL_TABLE",
+  "dataColumns" : [ {
+    "name" : "region",
+    "type" : "string",
+    "properties" : { }
+  }, {
+    "name" : "type_etablissement",
+    "type" : "string",
+    "properties" : { }
+  }, {
+    "name" : "nb_etablissements",
+    "type" : "bigint",
+    "properties" : { }
+  }, {
+    "name" : "calcul_date",
+    "type" : "timestamp",
+    "properties" : { }
+  } ],
+  "partitionColumns" : [ ],
+  "parameters" : {
+    "trino_version" : "435",
+    "trino_query_id" : "20251028_083442_00008_9wkcb",
+    "transactional" : "false",
+    "auto.purge" : "false",
+    "EXTERNAL" : "TRUE",
+    "STATS_GENERATED_VIA_STATS_TASK" : "workaround for potential lack of HIVE-12730"
+  },
+  "storageFormat" : "PARQUET",
+  "serdeParameters" : { },
+  "externalLocation" : "s3a://gold/kpi_etablissement_performance/",
+  "columnStatistics" : { }
+}

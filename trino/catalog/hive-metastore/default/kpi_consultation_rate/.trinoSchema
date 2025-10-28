@@ -1,0 +1,43 @@
+{
+  "writerVersion" : "435",
+  "owner" : "trino",
+  "tableType" : "EXTERNAL_TABLE",
+  "dataColumns" : [ {
+    "name" : "annee",
+    "type" : "int",
+    "properties" : { }
+  }, {
+    "name" : "mois",
+    "type" : "int",
+    "properties" : { }
+  }, {
+    "name" : "nb_patients",
+    "type" : "bigint",
+    "properties" : { }
+  }, {
+    "name" : "nb_consultations",
+    "type" : "bigint",
+    "properties" : { }
+  }, {
+    "name" : "consultations_par_patient",
+    "type" : "double",
+    "properties" : { }
+  }, {
+    "name" : "calcul_date",
+    "type" : "timestamp",
+    "properties" : { }
+  } ],
+  "partitionColumns" : [ ],
+  "parameters" : {
+    "trino_version" : "435",
+    "trino_query_id" : "20251028_090105_00118_9wkcb",
+    "transactional" : "false",
+    "auto.purge" : "false",
+    "EXTERNAL" : "TRUE",
+    "STATS_GENERATED_VIA_STATS_TASK" : "workaround for potential lack of HIVE-12730"
+  },
+  "storageFormat" : "PARQUET",
+  "serdeParameters" : { },
+  "externalLocation" : "s3a://gold/kpi_consultation_rate/",
+  "columnStatistics" : { }
+}

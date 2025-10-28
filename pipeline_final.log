@@ -1,0 +1,21 @@
+╔══════════════════════════════════════════════════════════════╗
+║    PIPELINE GOLD + TRINO - Résumé et Configuration Finale  ║
+╚══════════════════════════════════════════════════════════════╝
+
+📊 ÉTAT ACTUEL DU PIPELINE:
+   ✅ Bronze: 15 tables (~5.4M lignes)
+   ✅ Silver: 7 tables créées:
+      • dim_patient: 100,000
+      • dim_etablissement: 416,665
+      • dim_temps: 2,922
+      • fact_consultation: 1,027,157
+      • fact_hospitalisation: 2,479
+      • fact_deces: 620,608
+      • metrique_satisfaction: 2,097
+
+   ⏳ Gold: Lancement de l'agrégation (8 KPIs)...
+
+🚀 Job Gold lancé (PID: 187056)
+📝 Logs: tail -f gold_output.log
+
+⏳ Surveillance du job Gold...

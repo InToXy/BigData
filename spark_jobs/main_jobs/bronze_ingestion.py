@@ -6,12 +6,8 @@ from pyspark.sql.functions import (
     sha2, col, current_timestamp, lit, concat_ws, 
     trim, upper, lower, regexp_replace, when, 
     coalesce, udf, to_date, year, month,
-<<<<<<< HEAD
-    datediff, floor, substring, length, md5, date_format
-=======
-    datediff, floor, substring, length, md5,
+    datediff, floor, substring, length, md5, date_format,
     regexp_extract, split, expr, unix_timestamp
->>>>>>> fix/silver
 )
 from pyspark.sql.types import StringType, DateType, TimestampType, IntegerType
 import re
@@ -155,44 +151,8 @@ def clean_col_names(df):
     """Nettoie les noms de colonnes."""
     return df.toDF(*[re.sub(r'[^a-zA-Z0-9_]', '_', c).strip('_').lower() for c in df.columns])
 
-<<<<<<< HEAD
-def normalize_dates(df):
-    """Normalise les colonnes de dates avec support des formats variés et correction TIME."""
-    date_columns = []
-    time_columns = []
-    
-    for column in df.columns:
-        col_lower = column.lower()
-        # Identifier les colonnes TIME (heures uniquement)
-        if any(keyword in col_lower for keyword in ["heure", "time"]) and not any(keyword in col_lower for keyword in ["date", "timestamp"]):
-            time_columns.append(column)
-        # Identifier les colonnes DATE
-        elif any(keyword in col_lower for keyword in ["date", "naissance", "deces", "entree", "sortie", "consultation", "admission"]):
-            date_columns.append(column)
-    
-    # Traiter les colonnes TIME : convertir timestamp en string time (HH:mm:ss)
-    for column in time_columns:
-        if isinstance(df.schema[column].dataType, TimestampType):
-            # Extraire uniquement l'heure au format HH:mm:ss
-            df = df.withColumn(column, date_format(col(column), "HH:mm:ss"))
-    
-    # Traiter les colonnes DATE
-    for column in date_columns:
-        if not isinstance(df.schema[column].dataType, DateType):
-            df = df.withColumn(
-                column,
-                coalesce(
-                    to_date(col(column), "yyyy-MM-dd"),
-                    to_date(col(column), "dd/MM/yyyy"),
-                    to_date(col(column), "MM/dd/yyyy"),
-                    to_date(col(column), "M/d/yyyy"),
-                    to_date(col(column), "yyyy/MM/dd"),
-                    to_date(col(column), "dd-MM-yyyy"),
-                    to_date(col(column), "MM-dd-yyyy"),
-                    to_date(col(column), "M-d-yyyy")
-=======
 def normalize_dates_advanced(df, config):
-    """Normalisation avancée des dates - VERSION SÉCURISÉE."""
+    """Normalisation avancée des dates - VERSION SÉCURISÉE avec support TIME."""
     # Colonnes qui sont VRAIMENT des dates (basé sur le nom et le contexte métier)
     real_date_columns = [
         "date_naissance", "date_deces", "date_consultation", 
@@ -205,6 +165,18 @@ def normalize_dates_advanced(df, config):
         "dd/MM/yy", "MM/dd/yy", "dd.MM.yyyy", "yyyy.MM.dd"
     ]
     
+    # 1. Traiter les colonnes TIME (heures uniquement)
+    time_columns = []
+    for column in df.columns:
+        col_lower = column.lower()
+        if any(keyword in col_lower for keyword in ["heure", "time"]) and not any(keyword in col_lower for keyword in ["date", "timestamp"]):
+            time_columns.append(column)
+    
+    for column in time_columns:
+        if isinstance(df.schema[column].dataType, TimestampType):
+            df = df.withColumn(column, date_format(col(column), "HH:mm:ss"))
+    
+    # 2. Traiter les colonnes DATE
     for column in df.columns:
         col_lower = column.lower()
         
@@ -235,7 +207,6 @@ def normalize_dates_advanced(df, config):
                 date_expr = coalesce(
                     date_expr,
                     to_date(col(column).cast("timestamp"))
->>>>>>> fix/silver
                 )
                 
                 # Validation: années raisonnables
@@ -250,6 +221,8 @@ def normalize_dates_advanced(df, config):
             if not isinstance(df.schema[column].dataType, StringType):
                 df = df.withColumn(column, col(column).cast("string"))
                 print(f"     🔧 Colonne géographique préservée: {column}")
+    
+    return df
     
     return df
 
@@ -990,7 +963,7 @@ def main_optimized():
     {
         "type": "csv",
         "source_name": "Hospitalisations",
-        "path": "file:///data/source/csv/Hospitalisations.csv",
+        "path": "file:///data/source/Hospitalisation/Hospitalisations.csv",
         "output_table": "hospitalisations",
         "encoding": "ascii", 
         "delimiter": ";",
@@ -1031,7 +1004,7 @@ def main_optimized():
     {
         "type": "csv",
         "source_name": "Etablissements", 
-        "path": "file:///data/source/csv/etablissement_sante.csv",
+        "path": "file:///data/source/Etablissement de SANTE/etablissement_sante.csv",
         "output_table": "etablissements",
         "encoding": "utf-8",
         "delimiter": ";",
@@ -1047,13 +1020,13 @@ def main_optimized():
     # === QUALITY DATA - SATISFACTION 2020 ===
     {
         "type": "csv",
-        "source_name": "Satisfaction_MCO_2020",
-        "path": "file:///data/source/csv/resultats-esatisca-mco-open-data-2020.csv",
-        "output_table": "satisfaction_mco_2020", 
+        "source_name": "Satisfaction_MCO_2017",
+        "path": "file:///data/source/Satisfaction/ESATIS48H_MCO_recueil2017_donnees.csv",
+        "output_table": "satisfaction_mco_2017", 
         "encoding": "utf-8",
-        "delimiter": ",",
+        "delimiter": ";",
         "pii_columns": [],
-        "preserve_columns": ["finess", "region", "score_all_ajust", "classement", "evolution", "rs_finess", "finess_geo", "participation", "depot"],
+        "preserve_columns": ["finess", "region", "nb_repondants", "taux_recommandation", "libelle_etablissement"],
         "score_columns": [
             "score_avh_ajust", "score_acc_ajust", "score_pec_ajust", 
             "score_cer_ajust", "score_ovs_ajust", "taux_reco_brut"

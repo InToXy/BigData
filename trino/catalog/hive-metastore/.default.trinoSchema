@@ -1,0 +1,9 @@
+{
+  "writerVersion" : "435",
+  "location" : "s3a://gold/",
+  "ownerName" : "trino",
+  "ownerType" : "USER",
+  "parameters" : {
+    "trino_query_id" : "20251027_193035_00004_vbsqr"
+  }
+}

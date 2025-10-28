@@ -197,19 +197,61 @@ services:
     command: start-notebook.sh --NotebookApp.token='admin123' --NotebookApp.password=''
 
   # ============================================================
-<<<<<<< HEAD
-  # TRINO - Query Engine for PowerBI
+  # HIVE METASTORE - Metadata for Trino
+  # ============================================================
+  hive-metastore-db:
+    image: postgres:15-alpine
+    container_name: chu_hive_metastore_db
+    environment:
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive123
+      POSTGRES_DB: metastore
+    volumes:
+      - hive_metastore_db:/var/lib/postgresql/data
+    networks:
+      - bigdata_network
+    restart: unless-stopped
+
+  hive-metastore:
+    image: apache/hive:4.0.0
+    container_name: chu_hive_metastore
+    depends_on:
+      - hive-metastore-db
+      - minio
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      SERVICE_OPTS: "-Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://hive-metastore-db:5432/metastore -Djavax.jdo.option.ConnectionUserName=hive -Djavax.jdo.option.ConnectionPassword=hive123"
+      # MinIO S3 configuration
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin123
+      S3_ENDPOINT: http://minio:9000
+      S3_PATH_STYLE_ACCESS: "true"
+    ports:
+      - "9083:9083"
+    networks:
+      - bigdata_network
+    restart: unless-stopped
+    command: >
+      sh -c "
+        export HADOOP_CLASSPATH=\$HADOOP_CLASSPATH:/opt/hive/lib/postgresql-42.5.0.jar &&
+        /opt/hive/bin/schematool -dbType postgres -initSchema &&
+        /opt/hive/bin/hive --service metastore
+      "
+
+  # ============================================================
+  # TRINO - Query Engine for Data Analysis
   # ============================================================
   trino:
     image: trinodb/trino:435
     container_name: chu_trino
     depends_on:
+      - hive-metastore
       - minio
       - bigdata_postgres
     ports:
       - "8090:8080"  # Web UI et API
     volumes:
-      - ./trino/etc:/etc/trino
       - ./trino/catalog:/etc/trino/catalog
     networks:
       - bigdata_network
@@ -219,9 +261,6 @@ services:
 
   # ============================================================
   # SUPERSET
-=======
-  # SUPERSET 
->>>>>>> fix/silver
   # ============================================================
   superset-db:
       image: postgres:15-alpine
@@ -279,6 +318,7 @@ volumes:
   airflow_db_data:
   superset_db_data:
   postgres_data:
+  hive_metastore_db:
 
 # ============================================================
 # RÉSEAU

@@ -1,0 +1,106 @@
+nohup: ignoring input
+25/10/27 21:55:45 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+======================================================================
+🏆 AGRÉGATION GOLD - KPIs CHU DATA WAREHOUSE
+======================================================================
+📅 Démarrage: 2025-10-27 21:55:46.369121
+
+25/10/27 21:55:46 INFO SparkContext: Running Spark version 3.5.0
+25/10/27 21:55:46 INFO SparkContext: OS info Linux, 6.6.87.2-microsoft-standard-WSL2, amd64
+25/10/27 21:55:46 INFO SparkContext: Java version 17.0.8.1
+25/10/27 21:55:46 INFO ResourceUtils: ==============================================================
+25/10/27 21:55:46 INFO ResourceUtils: No custom resources configured for spark.driver.
+25/10/27 21:55:46 INFO ResourceUtils: ==============================================================
+25/10/27 21:55:46 INFO SparkContext: Submitted application: Gold KPI Aggregation
+25/10/27 21:55:46 INFO ResourceProfile: Default ResourceProfile created, executor resources: Map(cores -> name: cores, amount: 1, script: , vendor: , memory -> name: memory, amount: 1024, script: , vendor: , offHeap -> name: offHeap, amount: 0, script: , vendor: ), task resources: Map(cpus -> name: cpus, amount: 1.0)
+25/10/27 21:55:46 INFO ResourceProfile: Limiting resource is cpu
+25/10/27 21:55:46 INFO ResourceProfileManager: Added ResourceProfile id: 0
+25/10/27 21:55:46 INFO SecurityManager: Changing view acls to: jovyan
+25/10/27 21:55:46 INFO SecurityManager: Changing modify acls to: jovyan
+25/10/27 21:55:46 INFO SecurityManager: Changing view acls groups to: 
+25/10/27 21:55:46 INFO SecurityManager: Changing modify acls groups to: 
+25/10/27 21:55:46 INFO SecurityManager: SecurityManager: authentication disabled; ui acls disabled; users with view permissions: jovyan; groups with view permissions: EMPTY; users with modify permissions: jovyan; groups with modify permissions: EMPTY
+25/10/27 21:55:46 INFO Utils: Successfully started service 'sparkDriver' on port 46569.
+25/10/27 21:55:46 INFO SparkEnv: Registering MapOutputTracker
+25/10/27 21:55:46 INFO SparkEnv: Registering BlockManagerMaster
+25/10/27 21:55:46 INFO BlockManagerMasterEndpoint: Using org.apache.spark.storage.DefaultTopologyMapper for getting topology information
+25/10/27 21:55:46 INFO BlockManagerMasterEndpoint: BlockManagerMasterEndpoint up
+25/10/27 21:55:46 INFO SparkEnv: Registering BlockManagerMasterHeartbeat
+25/10/27 21:55:46 INFO DiskBlockManager: Created local directory at /tmp/blockmgr-7104ed40-592a-4b51-9a42-1bafd402667c
+25/10/27 21:55:46 INFO MemoryStore: MemoryStore started with capacity 2.2 GiB
+25/10/27 21:55:46 INFO SparkEnv: Registering OutputCommitCoordinator
+25/10/27 21:55:46 INFO JettyUtils: Start Jetty 0.0.0.0:4040 for SparkUI
+25/10/27 21:55:47 INFO Utils: Successfully started service 'SparkUI' on port 4040.
+25/10/27 21:55:47 INFO SparkContext: Added JAR file:///home/jovyan/jars/hadoop-aws-3.3.4.jar at spark://a5399d7b25b7:46569/jars/hadoop-aws-3.3.4.jar with timestamp 1761602146428
+25/10/27 21:55:47 INFO SparkContext: Added JAR file:///home/jovyan/jars/aws-java-sdk-bundle-1.12.262.jar at spark://a5399d7b25b7:46569/jars/aws-java-sdk-bundle-1.12.262.jar with timestamp 1761602146428
+25/10/27 21:55:47 INFO Executor: Starting executor ID driver on host a5399d7b25b7
+25/10/27 21:55:47 INFO Executor: OS info Linux, 6.6.87.2-microsoft-standard-WSL2, amd64
+25/10/27 21:55:47 INFO Executor: Java version 17.0.8.1
+25/10/27 21:55:47 INFO Executor: Starting executor with user classpath (userClassPathFirst = false): 'file:/home/jovyan/jars/hadoop-aws-3.3.4.jar,file:/home/jovyan/jars/aws-java-sdk-bundle-1.12.262.jar,file:/home/jovyan/aws-java-sdk-bundle-1.12.262.jar,file:/home/jovyan/hadoop-aws-3.3.4.jar'
+25/10/27 21:55:47 INFO Executor: Created or updated repl class loader org.apache.spark.util.MutableURLClassLoader@1b4c37ad for default.
+25/10/27 21:55:47 INFO Utils: Successfully started service 'org.apache.spark.network.netty.NettyBlockTransferService' on port 38723.
+25/10/27 21:55:47 INFO NettyBlockTransferService: Server created on a5399d7b25b7:38723
+25/10/27 21:55:47 INFO BlockManager: Using org.apache.spark.storage.RandomBlockReplicationPolicy for block replication policy
+25/10/27 21:55:47 INFO BlockManagerMaster: Registering BlockManager BlockManagerId(driver, a5399d7b25b7, 38723, None)
+25/10/27 21:55:47 INFO BlockManagerMasterEndpoint: Registering block manager a5399d7b25b7:38723 with 2.2 GiB RAM, BlockManagerId(driver, a5399d7b25b7, 38723, None)
+25/10/27 21:55:47 INFO BlockManagerMaster: Registered BlockManager BlockManagerId(driver, a5399d7b25b7, 38723, None)
+25/10/27 21:55:47 INFO BlockManager: Initialized BlockManager: BlockManagerId(driver, a5399d7b25b7, 38723, None)
+✅ Spark Gold session créée
+
+======================================================================
+🎯 GÉNÉRATION DES 8 KPIs
+======================================================================
+
+🎯 KPI 1: Consultation Rate...
+25/10/27 21:55:48 WARN MetricsConfig: Cannot locate configuration: tried hadoop-metrics2-s3a-file-system.properties,hadoop-metrics2.properties
+✅ Silver 'fact_consultation' lu: 1,027,157 lignes
+✅ Gold KPI 'kpi_consultation_rate' écrit: 0 lignes
+
+🎯 KPI 2: Hospitalisation Metrics...
+✅ Silver 'fact_hospitalisation' lu: 2,479 lignes
+✅ Gold KPI 'kpi_hospitalisation_metrics' écrit: 0 lignes
+
+🎯 KPI 3: Décès by Region...
+✅ Silver 'fact_deces' lu: 620,608 lignes
+✅ Gold KPI 'kpi_deces_by_region' écrit: 2 lignes
+
+🎯 KPI 4: Satisfaction Global...
+✅ Silver 'metrique_satisfaction' lu: 2,097 lignes
+✅ Gold KPI 'kpi_satisfaction_global' écrit: 2 lignes
+
+🎯 KPI 5: Activité Mensuelle...
+✅ Silver 'fact_consultation' lu: 1,027,157 lignes
+✅ Silver 'fact_hospitalisation' lu: 2,479 lignes
+✅ Gold KPI 'kpi_activite_mensuelle' écrit: 0 lignes
+
+🎯 KPI 6: Patient Demographics...
+✅ Silver 'dim_patient' lu: 100,000 lignes
+✅ Gold KPI 'kpi_patient_demographics' écrit: 10 lignes
+
+🎯 KPI 7: Établissement Performance...
+✅ Silver 'dim_etablissement' lu: 416,665 lignes
+✅ Gold KPI 'kpi_etablissement_performance' écrit: 69 lignes
+
+🎯 KPI 8: Temporal Trends...
+✅ Silver 'fact_consultation' lu: 1,027,157 lignes
+✅ Silver 'fact_hospitalisation' lu: 2,479 lignes
+✅ Silver 'fact_deces' lu: 620,608 lignes
+✅ Gold KPI 'kpi_temporal_trends' écrit: 4 lignes
+
+======================================================================
+✅ AGRÉGATION GOLD TERMINÉE
+======================================================================
+📅 Fin: 2025-10-27 21:56:06.080195
+
+KPIs créés (8 tables):
+  1. kpi_consultation_rate - Taux consultations
+  2. kpi_hospitalisation_metrics - Métriques hospitalisation
+  3. kpi_deces_by_region - Décès par région
+  4. kpi_satisfaction_global - Satisfaction agrégée
+  5. kpi_activite_mensuelle - Activité mensuelle
+  6. kpi_patient_demographics - Démographie patients
+  7. kpi_etablissement_performance - Performance établissements
+  8. kpi_temporal_trends - Tendances temporelles
+
+➡️  Prochaine étape: Visualisation Superset
+======================================================================

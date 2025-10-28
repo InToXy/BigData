@@ -1,0 +1,51 @@
+{
+  "writerVersion" : "435",
+  "owner" : "trino",
+  "tableType" : "EXTERNAL_TABLE",
+  "dataColumns" : [ {
+    "name" : "annee",
+    "type" : "int",
+    "properties" : { }
+  }, {
+    "name" : "region",
+    "type" : "string",
+    "properties" : { }
+  }, {
+    "name" : "sexe",
+    "type" : "string",
+    "properties" : { }
+  }, {
+    "name" : "nb_deces",
+    "type" : "bigint",
+    "properties" : { }
+  }, {
+    "name" : "age_moyen_deces",
+    "type" : "double",
+    "properties" : { }
+  }, {
+    "name" : "age_min_deces",
+    "type" : "int",
+    "properties" : { }
+  }, {
+    "name" : "age_max_deces",
+    "type" : "int",
+    "properties" : { }
+  }, {
+    "name" : "calcul_date",
+    "type" : "timestamp",
+    "properties" : { }
+  } ],
+  "partitionColumns" : [ ],
+  "parameters" : {
+    "trino_version" : "435",
+    "trino_query_id" : "20251028_085702_00112_9wkcb",
+    "transactional" : "false",
+    "auto.purge" : "false",
+    "EXTERNAL" : "TRUE",
+    "STATS_GENERATED_VIA_STATS_TASK" : "workaround for potential lack of HIVE-12730"
+  },
+  "storageFormat" : "PARQUET",
+  "serdeParameters" : { },
+  "externalLocation" : "s3a://gold/kpi_deces_by_region/",
+  "columnStatistics" : { }
+}

@@ -1,0 +1,202 @@
+nohup: ignoring input
+25/10/28 08:24:42 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+
+    ╔══════════════════════════════════════════╗
+    ║        PIPELINE BRONZE CORRIGÉ          ║
+    ║         ERRORS REGEX RÉSOLUES           ║
+    ╚══════════════════════════════════════════╝
+    
+⚙️  Configuration corrigée:
+   - Regex invalides CORRIGÉES
+   - 8 tables essentielles
+   - Écriture sécurisée activée
+   - Anonymisation RGPD-compliant
+25/10/28 08:24:43 INFO SparkContext: Running Spark version 3.5.0
+25/10/28 08:24:43 INFO SparkContext: OS info Linux, 6.6.87.2-microsoft-standard-WSL2, amd64
+25/10/28 08:24:43 INFO SparkContext: Java version 17.0.8.1
+25/10/28 08:24:43 INFO ResourceUtils: ==============================================================
+25/10/28 08:24:43 INFO ResourceUtils: No custom resources configured for spark.driver.
+25/10/28 08:24:43 INFO ResourceUtils: ==============================================================
+25/10/28 08:24:43 INFO SparkContext: Submitted application: Bronze Pipeline Optimisé
+25/10/28 08:24:43 INFO ResourceProfile: Default ResourceProfile created, executor resources: Map(cores -> name: cores, amount: 2, script: , vendor: , memory -> name: memory, amount: 2048, script: , vendor: , offHeap -> name: offHeap, amount: 0, script: , vendor: ), task resources: Map(cpus -> name: cpus, amount: 1.0)
+25/10/28 08:24:43 INFO ResourceProfile: Limiting resource is cpus at 2 tasks per executor
+25/10/28 08:24:43 INFO ResourceProfileManager: Added ResourceProfile id: 0
+25/10/28 08:24:44 INFO SecurityManager: Changing view acls to: jovyan
+25/10/28 08:24:44 INFO SecurityManager: Changing modify acls to: jovyan
+25/10/28 08:24:44 INFO SecurityManager: Changing view acls groups to: 
+25/10/28 08:24:44 INFO SecurityManager: Changing modify acls groups to: 
+25/10/28 08:24:44 INFO SecurityManager: SecurityManager: authentication disabled; ui acls disabled; users with view permissions: jovyan; groups with view permissions: EMPTY; users with modify permissions: jovyan; groups with modify permissions: EMPTY
+25/10/28 08:24:44 INFO Utils: Successfully started service 'sparkDriver' on port 41569.
+25/10/28 08:24:44 INFO SparkEnv: Registering MapOutputTracker
+25/10/28 08:24:44 INFO SparkEnv: Registering BlockManagerMaster
+25/10/28 08:24:44 INFO BlockManagerMasterEndpoint: Using org.apache.spark.storage.DefaultTopologyMapper for getting topology information
+25/10/28 08:24:44 INFO BlockManagerMasterEndpoint: BlockManagerMasterEndpoint up
+25/10/28 08:24:44 INFO SparkEnv: Registering BlockManagerMasterHeartbeat
+25/10/28 08:24:44 INFO DiskBlockManager: Created local directory at /tmp/blockmgr-9498abf5-eb39-4e0a-b0d8-afb5b93403c5
+25/10/28 08:24:44 INFO MemoryStore: MemoryStore started with capacity 1048.8 MiB
+25/10/28 08:24:44 INFO SparkEnv: Registering OutputCommitCoordinator
+25/10/28 08:24:44 INFO JettyUtils: Start Jetty 0.0.0.0:4040 for SparkUI
+25/10/28 08:24:44 INFO Utils: Successfully started service 'SparkUI' on port 4040.
+25/10/28 08:24:44 INFO SparkContext: Added JAR /home/jovyan/jars/aws-java-sdk-bundle-1.12.262.jar at spark://a5399d7b25b7:41569/jars/aws-java-sdk-bundle-1.12.262.jar with timestamp 1761639883871
+25/10/28 08:24:44 INFO SparkContext: Added JAR /home/jovyan/jars/hadoop-aws-3.3.4.jar at spark://a5399d7b25b7:41569/jars/hadoop-aws-3.3.4.jar with timestamp 1761639883871
+25/10/28 08:24:44 INFO SparkContext: Added JAR /home/jovyan/jars/aws-java-sdk-bundle-1.12.533.jar at spark://a5399d7b25b7:41569/jars/aws-java-sdk-bundle-1.12.533.jar with timestamp 1761639883871
+25/10/28 08:24:44 INFO SparkContext: Added JAR /home/jovyan/jars/hadoop-common-3.3.4.jar at spark://a5399d7b25b7:41569/jars/hadoop-common-3.3.4.jar with timestamp 1761639883871
+25/10/28 08:24:44 INFO SparkContext: Added JAR /home/jovyan/jars/hadoop-aws-3.3.6.jar at spark://a5399d7b25b7:41569/jars/hadoop-aws-3.3.6.jar with timestamp 1761639883871
+25/10/28 08:24:44 INFO SparkContext: Added JAR /home/jovyan/jars/postgresql-42.5.0.jar at spark://a5399d7b25b7:41569/jars/postgresql-42.5.0.jar with timestamp 1761639883871
+25/10/28 08:24:44 INFO SparkContext: Added JAR /home/jovyan/jars/postgresql-42.6.0.jar at spark://a5399d7b25b7:41569/jars/postgresql-42.6.0.jar with timestamp 1761639883871
+25/10/28 08:24:44 INFO SparkContext: Added JAR /home/jovyan/jars/postgresql-42.2.27.jar at spark://a5399d7b25b7:41569/jars/postgresql-42.2.27.jar with timestamp 1761639883871
+25/10/28 08:24:44 INFO Executor: Starting executor ID driver on host a5399d7b25b7
+25/10/28 08:24:44 INFO Executor: OS info Linux, 6.6.87.2-microsoft-standard-WSL2, amd64
+25/10/28 08:24:44 INFO Executor: Java version 17.0.8.1
+25/10/28 08:24:44 INFO Executor: Starting executor with user classpath (userClassPathFirst = false): 'file:/home/jovyan/jars/hadoop-aws-3.3.4.jar,file:/home/jovyan/jars/aws-java-sdk-bundle-1.12.262.jar,file:/home/jovyan/jars/postgresql-42.5.0.jar,file:/home/jovyan/postgresql-42.5.0.jar,file:/home/jovyan/aws-java-sdk-bundle-1.12.262.jar,file:/home/jovyan/hadoop-aws-3.3.4.jar'
+25/10/28 08:24:44 INFO Executor: Created or updated repl class loader org.apache.spark.util.MutableURLClassLoader@71d869d for default.
+25/10/28 08:24:44 INFO Executor: Fetching spark://a5399d7b25b7:41569/jars/postgresql-42.2.27.jar with timestamp 1761639883871
+25/10/28 08:24:45 INFO TransportClientFactory: Successfully created connection to a5399d7b25b7/172.18.0.6:41569 after 29 ms (0 ms spent in bootstraps)
+25/10/28 08:24:45 INFO Utils: Fetching spark://a5399d7b25b7:41569/jars/postgresql-42.2.27.jar to /tmp/spark-96077313-beb7-470e-a885-ac5fe43d2f95/userFiles-8c9ccd68-1b2e-4fe7-a275-61b16a83932e/fetchFileTemp17109263200369840584.tmp
+25/10/28 08:24:45 INFO Executor: Adding file:/tmp/spark-96077313-beb7-470e-a885-ac5fe43d2f95/userFiles-8c9ccd68-1b2e-4fe7-a275-61b16a83932e/postgresql-42.2.27.jar to class loader default
+25/10/28 08:24:45 INFO Executor: Fetching spark://a5399d7b25b7:41569/jars/aws-java-sdk-bundle-1.12.533.jar with timestamp 1761639883871
+25/10/28 08:24:45 INFO Utils: Fetching spark://a5399d7b25b7:41569/jars/aws-java-sdk-bundle-1.12.533.jar to /tmp/spark-96077313-beb7-470e-a885-ac5fe43d2f95/userFiles-8c9ccd68-1b2e-4fe7-a275-61b16a83932e/fetchFileTemp6279546284054451716.tmp
+25/10/28 08:24:46 INFO Executor: Adding file:/tmp/spark-96077313-beb7-470e-a885-ac5fe43d2f95/userFiles-8c9ccd68-1b2e-4fe7-a275-61b16a83932e/aws-java-sdk-bundle-1.12.533.jar to class loader default
+25/10/28 08:24:46 INFO Executor: Fetching spark://a5399d7b25b7:41569/jars/hadoop-aws-3.3.6.jar with timestamp 1761639883871
+25/10/28 08:24:46 INFO Utils: Fetching spark://a5399d7b25b7:41569/jars/hadoop-aws-3.3.6.jar to /tmp/spark-96077313-beb7-470e-a885-ac5fe43d2f95/userFiles-8c9ccd68-1b2e-4fe7-a275-61b16a83932e/fetchFileTemp8157577679220351971.tmp
+25/10/28 08:24:46 INFO Executor: Adding file:/tmp/spark-96077313-beb7-470e-a885-ac5fe43d2f95/userFiles-8c9ccd68-1b2e-4fe7-a275-61b16a83932e/hadoop-aws-3.3.6.jar to class loader default
+25/10/28 08:24:46 INFO Executor: Fetching spark://a5399d7b25b7:41569/jars/postgresql-42.6.0.jar with timestamp 1761639883871
+25/10/28 08:24:46 INFO Utils: Fetching spark://a5399d7b25b7:41569/jars/postgresql-42.6.0.jar to /tmp/spark-96077313-beb7-470e-a885-ac5fe43d2f95/userFiles-8c9ccd68-1b2e-4fe7-a275-61b16a83932e/fetchFileTemp5486069613634985455.tmp
+25/10/28 08:24:46 INFO Executor: Adding file:/tmp/spark-96077313-beb7-470e-a885-ac5fe43d2f95/userFiles-8c9ccd68-1b2e-4fe7-a275-61b16a83932e/postgresql-42.6.0.jar to class loader default
+25/10/28 08:24:46 INFO Executor: Fetching spark://a5399d7b25b7:41569/jars/hadoop-common-3.3.4.jar with timestamp 1761639883871
+25/10/28 08:24:46 INFO Utils: Fetching spark://a5399d7b25b7:41569/jars/hadoop-common-3.3.4.jar to /tmp/spark-96077313-beb7-470e-a885-ac5fe43d2f95/userFiles-8c9ccd68-1b2e-4fe7-a275-61b16a83932e/fetchFileTemp9791442584335292352.tmp
+25/10/28 08:24:46 INFO Executor: Adding file:/tmp/spark-96077313-beb7-470e-a885-ac5fe43d2f95/userFiles-8c9ccd68-1b2e-4fe7-a275-61b16a83932e/hadoop-common-3.3.4.jar to class loader default
+25/10/28 08:24:46 INFO Utils: Successfully started service 'org.apache.spark.network.netty.NettyBlockTransferService' on port 45589.
+25/10/28 08:24:46 INFO NettyBlockTransferService: Server created on a5399d7b25b7:45589
+25/10/28 08:24:46 INFO BlockManager: Using org.apache.spark.storage.RandomBlockReplicationPolicy for block replication policy
+25/10/28 08:24:46 INFO BlockManagerMaster: Registering BlockManager BlockManagerId(driver, a5399d7b25b7, 45589, None)
+25/10/28 08:24:46 INFO BlockManagerMasterEndpoint: Registering block manager a5399d7b25b7:45589 with 1048.8 MiB RAM, BlockManagerId(driver, a5399d7b25b7, 45589, None)
+25/10/28 08:24:46 INFO BlockManagerMaster: Registered BlockManager BlockManagerId(driver, a5399d7b25b7, 45589, None)
+25/10/28 08:24:46 INFO BlockManager: Initialized BlockManager: BlockManagerId(driver, a5399d7b25b7, 45589, None)
+✅ Spark initialisé
+🔍 Test MinIO...
+25/10/28 08:24:50 WARN MetricsConfig: Cannot locate configuration: tried hadoop-metrics2-s3a-file-system.properties,hadoop-metrics2.properties
+✅ MinIO OK
+🔍 Test PostgreSQL...
+✅ PostgreSQL OK
+
+🎯 TRAITEMENT: patients
+✅ Lecture "Patient": 100000 lignes
+   🔧 Colonne 'date' renommée en 'date_naissance'
+     🔧 Normalisation des dates pour: date_naissance
+25/10/28 08:24:57 WARN SparkStringUtils: Truncated the string representation of a plan since it was too large. This behavior can be adjusted by setting 'spark.sql.debug.maxToStringFields'.
+✅ PostgreSQL patients traité: 100000 lignes
+
+🎯 TRAITEMENT: consultations
+✅ Lecture "Consultation": 1027157 lignes
+   🔧 Colonne 'date' renommée en 'date_consultation'
+✅ PostgreSQL consultations traité: 1027157 lignes
+
+🎯 TRAITEMENT: deces
+✅ Lecture "deces": 620608 lignes
+
+🔍 DIAGNOSTIC DES DATES - deces
+==================================================
+
+📅 date_naissance:
+   • Total: 620,608 lignes
+   • Nulles: 13,918 (2.2%)
+   • Top années: ['1930 (<built-in method count of Row object at 0x7b52629092b0>)', '1931 (<built-in method count of Row object at 0x7b525011c130>)', '1929 (<built-in method count of Row object at 0x7b524aadc720>)', '1928 (<built-in method count of Row object at 0x7b524aadce00>)', '1932 (<built-in method count of Row object at 0x7b524aade1b0>)', '1927 (<built-in method count of Row object at 0x7b524aadf4c0>)', '1933 (<built-in method count of Row object at 0x7b524aadcdb0>)', '1926 (<built-in method count of Row object at 0x7b524aade570>)', '1934 (<built-in method count of Row object at 0x7b524aadf6a0>)', '1925 (<built-in method count of Row object at 0x7b524aadf560>)']
+
+📅 code_lieu_naissance:
+   • Total: 620,608 lignes
+   • Nulles: 0 (0.0%)
+   • Top années: ['99352 (<built-in method count of Row object at 0x7b524aadd6c0>)', '99127 (<built-in method count of Row object at 0x7b524aadc3b0>)', '75114 (<built-in method count of Row object at 0x7b524aadf9c0>)', '99350 (<built-in method count of Row object at 0x7b524aade020>)', '13055 (<built-in method count of Row object at 0x7b524aadfb00>)', '99134 (<built-in method count of Row object at 0x7b524aadca90>)', '99351 (<built-in method count of Row object at 0x7b524aadf8d0>)', '99139 (<built-in method count of Row object at 0x7b524aadc810>)', '92352 (<built-in method count of Row object at 0x7b524aadc040>)', '75115 (<built-in method count of Row object at 0x7b524aadd5d0>)']
+   ⚠️  Années invalides: 620045
+
+📅 lieu_naissance:
+   • Total: 620,608 lignes
+   • Nulles: 535 (0.1%)
+   • Top années: ['99397 (<built-in method count of Row object at 0x7b524aadf100>)']
+   ⚠️  Années invalides: 1
+
+📅 pays_naissance:
+   • Total: 620,608 lignes
+   • Nulles: 535,769 (86.3%)
+
+📅 date_deces:
+   • Total: 620,608 lignes
+   • Nulles: 0 (0.0%)
+   • Top années: ['2019 (<built-in method count of Row object at 0x7b524acb6ed0>)']
+
+📅 code_lieu_deces:
+   • Total: 620,608 lignes
+   • Nulles: 0 (0.0%)
+   • Top années: ['31555 (<built-in method count of Row object at 0x7b524acb5e40>)', '6088 (<built-in method count of Row object at 0x7b5261969580>)', '59350 (<built-in method count of Row object at 0x7b524aadf100>)', '33063 (<built-in method count of Row object at 0x7b524aadd5d0>)', '67482 (<built-in method count of Row object at 0x7b524aade020>)', '44109 (<built-in method count of Row object at 0x7b524aadc3b0>)', '34172 (<built-in method count of Row object at 0x7b524aade9d0>)', '75115 (<built-in method count of Row object at 0x7b524aadf1a0>)', '76540 (<built-in method count of Row object at 0x7b524aade930>)', '35238 (<built-in method count of Row object at 0x7b524aadf880>)']
+   ⚠️  Années invalides: 617179
+
+📅 numero_acte_deces:
+   • Total: 620,608 lignes
+   • Nulles: 0 (0.0%)
+   • Top années: ['1000 (<built-in method count of Row object at 0x7b524aadddf0>)', '1021 (<built-in method count of Row object at 0x7b524aaddb20>)', '1011 (<built-in method count of Row object at 0x7b524aadd490>)', '1017 (<built-in method count of Row object at 0x7b524aadefc0>)', '1009 (<built-in method count of Row object at 0x7b524aadce00>)', '1003 (<built-in method count of Row object at 0x7b524aadf4c0>)', '1010 (<built-in method count of Row object at 0x7b524aadc720>)', '1001 (<built-in method count of Row object at 0x7b524aadd300>)', '1012 (<built-in method count of Row object at 0x7b524aadeac0>)', '1022 (<built-in method count of Row object at 0x7b524aadffb0>)']
+   ⚠️  Années invalides: 81293
+   🔧 Amélioration des données décès
+     ✅ Département extrait de code_lieu_deces
+     ✅ Région déduite du département
+✅ PostgreSQL deces traité: 620608 lignes
+
+🎯 TRAITEMENT: hospitalisations
+📥 CSV hospitalisations: 2479 lignes
+     🔧 Normalisation des dates pour: date_entree
+   🔧 Amélioration des données hospitalisations
+     ✅ 'date_entree' → 'date_admission'
+     ✅ 'suite_diagnostic_consultation' → 'diagnostic_principal'
+     ⚠️  Colonne 'sexe' ajoutée avec valeur par défaut 'I'
+✅ CSV hospitalisations traité: 2479 lignes
+
+🎯 TRAITEMENT: diagnostics
+✅ Lecture "Diagnostic": 15490 lignes
+✅ PostgreSQL diagnostics traité: 15490 lignes
+
+🎯 TRAITEMENT: professionnels_sante
+✅ Lecture "Professionnel_de_sante": 1048575 lignes
+✅ PostgreSQL professionnels_sante traité: 1048575 lignes
+
+🎯 TRAITEMENT: etablissements
+📥 CSV etablissements: 416665 lignes
+     🔧 Colonne géographique préservée: finess
+   🔧 Amélioration des données établissements
+     ✅ 'identifiant_organisation' → 'finess_site'
+     ✅ Région déduite du code postal
+✅ CSV etablissements traité: 416665 lignes
+
+🎯 TRAITEMENT: satisfaction_mco_2017
+📥 CSV satisfaction_mco_2017: 1157 lignes
+   🔧 Amélioration des données satisfaction
+     ✅ 'score_all_rea_ajust' → 'score_all_ajust'
+✅ CSV satisfaction_mco_2017 traité: 1157 lignes
+
+🎉 PIPELINE BRONZE CORRIGÉ TERMINÉ
+✅ Succès: 8 tables
+❌ Échecs: 0 tables
+🎯 Tables essentielles: 8/8
+🔐 Anonymisation RGPD: ACTIVÉE
+🔧 Regex corrigées: OUI
+
+📋 TABLES TRAITÉES:
+   ✅ patients
+   ✅ consultations
+   ✅ deces
+   ✅ hospitalisations
+   ✅ diagnostics
+   ✅ professionnels_sante
+   ✅ etablissements
+   ✅ satisfaction_mco_2017
+
+🔍 VÉRIFICATION FINALE:
+✅ Spark initialisé
+🔍 VÉRIFICATION DES DONNÉES BRONZE
+==================================================
+✅ patients: 100000 lignes - Colonnes manquantes: []
+✅ consultations: 1027157 lignes - Colonnes manquantes: []
+✅ hospitalisations: 2479 lignes - Colonnes manquantes: []
+✅ deces: 620608 lignes - Colonnes manquantes: []
+✅ diagnostics: 15490 lignes - Colonnes manquantes: []
+✅ professionnels_sante: 1048575 lignes - Colonnes manquantes: []
+❌ etablissements: 416665 lignes - Colonnes manquantes: ['identifiant_organisation']
+❌ satisfaction_mco_2020: ERREUR - [PATH_NOT_FOUND] Path does not exist: s3a://bronze/satisfaction_mco_2020.

@@ -1,0 +1,126 @@
+nohup: ignoring input
+25/10/27 21:25:54 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+======================================================================
+🏥 TRANSFORMATION SILVER - CHU DATA WAREHOUSE
+======================================================================
+📅 Démarrage: 2025-10-27 21:25:55.685823
+
+25/10/27 21:25:55 INFO SparkContext: Running Spark version 3.5.0
+25/10/27 21:25:55 INFO SparkContext: OS info Linux, 6.6.87.2-microsoft-standard-WSL2, amd64
+25/10/27 21:25:55 INFO SparkContext: Java version 17.0.8.1
+25/10/27 21:25:55 INFO ResourceUtils: ==============================================================
+25/10/27 21:25:55 INFO ResourceUtils: No custom resources configured for spark.driver.
+25/10/27 21:25:55 INFO ResourceUtils: ==============================================================
+25/10/27 21:25:55 INFO SparkContext: Submitted application: Silver Layer Transformation
+25/10/27 21:25:55 INFO ResourceProfile: Default ResourceProfile created, executor resources: Map(cores -> name: cores, amount: 1, script: , vendor: , memory -> name: memory, amount: 1024, script: , vendor: , offHeap -> name: offHeap, amount: 0, script: , vendor: ), task resources: Map(cpus -> name: cpus, amount: 1.0)
+25/10/27 21:25:55 INFO ResourceProfile: Limiting resource is cpu
+25/10/27 21:25:55 INFO ResourceProfileManager: Added ResourceProfile id: 0
+25/10/27 21:25:55 INFO SecurityManager: Changing view acls to: jovyan
+25/10/27 21:25:55 INFO SecurityManager: Changing modify acls to: jovyan
+25/10/27 21:25:55 INFO SecurityManager: Changing view acls groups to: 
+25/10/27 21:25:55 INFO SecurityManager: Changing modify acls groups to: 
+25/10/27 21:25:55 INFO SecurityManager: SecurityManager: authentication disabled; ui acls disabled; users with view permissions: jovyan; groups with view permissions: EMPTY; users with modify permissions: jovyan; groups with modify permissions: EMPTY
+25/10/27 21:25:56 INFO Utils: Successfully started service 'sparkDriver' on port 36549.
+25/10/27 21:25:56 INFO SparkEnv: Registering MapOutputTracker
+25/10/27 21:25:56 INFO SparkEnv: Registering BlockManagerMaster
+25/10/27 21:25:56 INFO BlockManagerMasterEndpoint: Using org.apache.spark.storage.DefaultTopologyMapper for getting topology information
+25/10/27 21:25:56 INFO BlockManagerMasterEndpoint: BlockManagerMasterEndpoint up
+25/10/27 21:25:56 INFO SparkEnv: Registering BlockManagerMasterHeartbeat
+25/10/27 21:25:56 INFO DiskBlockManager: Created local directory at /tmp/blockmgr-4bb77d2f-a446-467c-a0d8-1d745366c40e
+25/10/27 21:25:56 INFO MemoryStore: MemoryStore started with capacity 1048.8 MiB
+25/10/27 21:25:56 INFO SparkEnv: Registering OutputCommitCoordinator
+25/10/27 21:25:56 INFO JettyUtils: Start Jetty 0.0.0.0:4040 for SparkUI
+25/10/27 21:25:56 INFO Utils: Successfully started service 'SparkUI' on port 4040.
+25/10/27 21:25:57 INFO SparkContext: Added JAR file:///home/jovyan/jars/hadoop-aws-3.3.4.jar at spark://a5399d7b25b7:36549/jars/hadoop-aws-3.3.4.jar with timestamp 1761600355794
+25/10/27 21:25:57 INFO SparkContext: Added JAR file:///home/jovyan/jars/aws-java-sdk-bundle-1.12.262.jar at spark://a5399d7b25b7:36549/jars/aws-java-sdk-bundle-1.12.262.jar with timestamp 1761600355794
+25/10/27 21:25:57 INFO Executor: Starting executor ID driver on host a5399d7b25b7
+25/10/27 21:25:57 INFO Executor: OS info Linux, 6.6.87.2-microsoft-standard-WSL2, amd64
+25/10/27 21:25:57 INFO Executor: Java version 17.0.8.1
+25/10/27 21:25:57 INFO Executor: Starting executor with user classpath (userClassPathFirst = false): 'file:/home/jovyan/jars/hadoop-aws-3.3.4.jar,file:/home/jovyan/jars/aws-java-sdk-bundle-1.12.262.jar,file:/home/jovyan/aws-java-sdk-bundle-1.12.262.jar,file:/home/jovyan/hadoop-aws-3.3.4.jar'
+25/10/27 21:25:57 INFO Executor: Created or updated repl class loader org.apache.spark.util.MutableURLClassLoader@3b07ce3c for default.
+25/10/27 21:25:57 INFO Utils: Successfully started service 'org.apache.spark.network.netty.NettyBlockTransferService' on port 33915.
+25/10/27 21:25:57 INFO NettyBlockTransferService: Server created on a5399d7b25b7:33915
+25/10/27 21:25:57 INFO BlockManager: Using org.apache.spark.storage.RandomBlockReplicationPolicy for block replication policy
+25/10/27 21:25:57 INFO BlockManagerMaster: Registering BlockManager BlockManagerId(driver, a5399d7b25b7, 33915, None)
+25/10/27 21:25:57 INFO BlockManagerMasterEndpoint: Registering block manager a5399d7b25b7:33915 with 1048.8 MiB RAM, BlockManagerId(driver, a5399d7b25b7, 33915, None)
+25/10/27 21:25:57 INFO BlockManagerMaster: Registered BlockManager BlockManagerId(driver, a5399d7b25b7, 33915, None)
+25/10/27 21:25:57 INFO BlockManager: Initialized BlockManager: BlockManagerId(driver, a5399d7b25b7, 33915, None)
+✅ Spark Silver session créée
+
+======================================================================
+📋 CRÉATION DES DIMENSIONS
+======================================================================
+
+🔵 Création dim_patient...
+25/10/27 21:25:59 WARN MetricsConfig: Cannot locate configuration: tried hadoop-metrics2-s3a-file-system.properties,hadoop-metrics2.properties
+✅ Bronze 'patients' lu: 100,000 lignes
+✅ Silver 'dim_patient' écrit: 100,000 lignes
+
+🔵 Création dim_etablissement...
+✅ Bronze 'etablissements' lu: 416,665 lignes
+✅ Silver 'dim_etablissement' écrit: 416,665 lignes
+
+🔵 Création dim_temps...
+25/10/27 21:26:34 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:34 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:34 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:34 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:36 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:36 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:36 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:36 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+✅ Silver 'dim_temps' écrit: 2,922 lignes
+
+======================================================================
+📊 CRÉATION DES TABLES DE FAITS
+======================================================================
+
+🟢 Création fact_consultation...
+✅ Bronze 'consultations' lu: 1,027,157 lignes
+25/10/27 21:26:37 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:37 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:37 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:38 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:38 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+✅ Silver 'fact_consultation' écrit: 1,027,157 lignes
+
+🟢 Création fact_hospitalisation...
+✅ Bronze 'hospitalisations' lu: 2,479 lignes
+25/10/27 21:26:43 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:43 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:43 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:44 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:44 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+✅ Silver 'fact_hospitalisation' écrit: 2,479 lignes
+
+🟢 Création fact_deces...
+✅ Bronze 'deces_2019' lu: 620,608 lignes
+25/10/27 21:26:47 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:47 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:47 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:47 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+25/10/27 21:26:47 WARN WindowExec: No Partition Defined for Window operation! Moving all data to a single partition, this can cause serious performance degradation.
+✅ Silver 'fact_deces' écrit: 620,608 lignes
+
+======================================================================
+📈 CRÉATION DES MÉTRIQUES
+======================================================================
+
+📊 Création metrique_satisfaction...
+✅ Bronze 'satisfaction_48h_2019' lu: 1,152 lignes
+✅ Bronze 'satisfaction_mco_2019' lu: 945 lignes
+25/10/27 21:26:49 WARN SparkStringUtils: Truncated the string representation of a plan since it was too large. This behavior can be adjusted by setting 'spark.sql.debug.maxToStringFields'.
+✅ Silver 'metrique_satisfaction' écrit: 2,097 lignes
+
+======================================================================
+✅ TRANSFORMATION SILVER TERMINÉE
+======================================================================
+📅 Fin: 2025-10-27 21:26:50.666583
+
+Tables créées:
+  📋 Dimensions: dim_patient, dim_etablissement, dim_temps
+  📊 Faits: fact_consultation, fact_hospitalisation, fact_deces
+  📈 Métriques: metrique_satisfaction
+
+➡️  Prochaine étape: Gold Aggregation
+======================================================================
