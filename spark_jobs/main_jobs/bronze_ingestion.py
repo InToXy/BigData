@@ -2,6 +2,10 @@ import os
 import sys
 import uuid as uuid_lib
 from pyspark.sql import SparkSession
+
+# Import de l'utilitaire metastore
+sys.path.insert(0, '/home/jovyan/jobs/utils')
+from metastore_init import initialize_for_layer
 from pyspark.sql.functions import (
     sha2, col, current_timestamp, lit, concat_ws, 
     trim, upper, lower, regexp_replace, when, 
@@ -41,13 +45,16 @@ def get_spark_session():
         jars_dir = "/home/jovyan/jars"
         jar_files = [f for f in os.listdir(jars_dir) if f.endswith('.jar')]
         jars_path = ",".join([f"{jars_dir}/{jar}" for jar in jar_files])
-        
+
         builder = SparkSession.builder \
             .appName("Bronze Pipeline Optimisé") \
             .config("spark.jars", jars_path) \
             .config("spark.sql.parquet.datetimeRebaseModeInWrite", "CORRECTED") \
             .config("spark.sql.parquet.datetimeRebaseModeInRead", "CORRECTED") \
-            .config("spark.sql.legacy.timeParserPolicy", "LEGACY")
+            .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
+            .config("spark.sql.catalogImplementation", "hive") \
+            .config("hive.metastore.uris", "thrift://hive-metastore:9083") \
+            .enableHiveSupport()
         
         if LOW_RESOURCE_MODE:
             builder = builder \
@@ -581,45 +588,49 @@ def process_dataframe_enhanced(df, config, source_type):
     return df
 
 def write_to_minio_safe(df, output_table):
-    """Écrit les données dans MinIO de manière SÉCURISÉE."""
-    bronze_path = f"s3a://{MINIO_CONFIG['bucket']}/{output_table}"
-    
+    """Écrit les données dans MinIO ET enregistre dans le metastore."""
     try:
         # Optimisation partitions
         df = df.coalesce(2)
-        
+
         # CORRECTION : Nettoyage caractères de contrôle avec regex VALIDE
         for column in df.columns:
             if isinstance(df.schema[column].dataType, StringType):
                 # Regex valide pour supprimer les caractères de contrôle
                 df = df.withColumn(column,
-                    when(col(column).isNotNull(), 
+                    when(col(column).isNotNull(),
                          regexp_replace(col(column), r"[\x00-\x1F]", ""))
                     .otherwise(col(column))
                 )
-        
+
         # Réorganisation des colonnes: techniques en premier
         technical_cols = [c for c in df.columns if c.startswith('_')]
         business_cols = [c for c in df.columns if not c.startswith('_')]
         df = df.select(*technical_cols, *business_cols)
-        
-        # Écriture avec gestion d'erreur
+
+        # ✅ NOUVEAU: Écriture avec enregistrement dans le metastore
+        table_name = f"bronze.{output_table}"
+
         df.write \
             .mode("overwrite") \
+            .format("parquet") \
             .option("compression", "snappy") \
-            .option("maxRecordsPerFile", "500000") \
-            .parquet(bronze_path)
-        
+            .option("path", f"s3a://{MINIO_CONFIG['bucket']}/{output_table}") \
+            .saveAsTable(table_name)
+
+        print(f"   ✅ Table {table_name} enregistrée dans le metastore")
         return df.count()
-        
+
     except Exception as e:
         print(f"❌ Erreur écriture {output_table}: {e}")
-        # Fallback: écriture sans transformations risquées
+        # Fallback: écriture directe sans metastore
         try:
+            bronze_path = f"s3a://{MINIO_CONFIG['bucket']}/{output_table}"
             df.coalesce(2).write \
                 .mode("overwrite") \
                 .option("compression", "snappy") \
                 .parquet(bronze_path)
+            print(f"   ⚠️  Données écrites mais table non enregistrée dans le metastore")
             return df.count()
         except Exception as fallback_error:
             print(f"💥 Échec fallback {output_table}: {fallback_error}")
@@ -888,7 +899,10 @@ def main_optimized():
     
     try:
         spark = get_spark_session()
-        
+
+        # Initialiser le schéma bronze dans le metastore
+        initialize_for_layer(spark, "bronze")
+
         if not test_connections(spark):
             print("💥 Erreur connexion")
             sys.exit(1)

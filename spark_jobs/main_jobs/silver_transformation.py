@@ -3,6 +3,10 @@ import sys
 import time
 from datetime import datetime
 from pyspark.sql import SparkSession
+
+# Import de l'utilitaire metastore
+sys.path.insert(0, '/home/jovyan/jobs/utils')
+from metastore_init import initialize_for_layer
 from pyspark.sql.functions import (
     col, count, countDistinct, sum as spark_sum, avg, min, max,
     when, lit, datediff, floor, year, month, quarter,
@@ -93,7 +97,10 @@ def get_spark_session():
             .config("spark.sql.autoBroadcastJoinThreshold", "10485760") \
             .config("spark.sql.shuffle.partitions", "8") \
             .config("spark.driver.memory", "2g") \
-            .config("spark.executor.memory", "2g")
+            .config("spark.executor.memory", "2g") \
+            .config("spark.sql.catalogImplementation", "hive") \
+            .config("hive.metastore.uris", "thrift://hive-metastore:9083") \
+            .enableHiveSupport()
         
         if jars_path:
             builder = builder.config("spark.jars", jars_path)
@@ -120,22 +127,24 @@ def read_bronze_table(spark, table_name):
         raise
 
 def write_silver_table(df, table_name, partition_cols=None):
-    """Écrit une table dans le layer Silver."""
+    """Écrit une table dans le layer Silver ET enregistre dans le metastore."""
     try:
-        silver_path = f"s3a://{MINIO_CONFIG['silver_bucket']}/{table_name}"
-        
-        writer = df.write.mode("overwrite")
-        
+        # ✅ NOUVEAU: Écriture avec enregistrement dans le metastore
+        table_full_name = f"silver.{table_name}"
+
+        writer = df.write.mode("overwrite").format("parquet")
+
         if partition_cols:
             writer = writer.partitionBy(partition_cols)
-            
+
         writer.option("compression", "snappy") \
               .option("maxRecordsPerFile", "100000") \
-              .parquet(silver_path)
-        
-        print(f"✅ Silver '{table_name}' écrit: {df.count()} lignes")
+              .option("path", f"s3a://{MINIO_CONFIG['silver_bucket']}/{table_name}") \
+              .saveAsTable(table_full_name)
+
+        print(f"✅ Silver '{table_full_name}' écrit: {df.count()} lignes + enregistré dans metastore")
         return True
-        
+
     except Exception as e:
         print(f"❌ Erreur écriture Silver {table_name}: {e}")
         raise
@@ -1019,7 +1028,10 @@ def main():
     try:
         # Initialisation Spark
         spark = get_spark_session()
-        
+
+        # Initialiser le schéma silver dans le metastore
+        initialize_for_layer(spark, "silver")
+
         print("\n📥 Lecture des données Bronze...")
         # Tables principales (noms au singulier dans Bronze)
         bronze_patients = read_bronze_table(spark, "patient")

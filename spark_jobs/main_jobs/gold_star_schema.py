@@ -9,6 +9,10 @@ import sys
 import time
 from datetime import datetime
 from pyspark.sql import SparkSession
+
+# Import de l'utilitaire metastore
+sys.path.insert(0, '/home/jovyan/jobs/utils')
+from metastore_init import initialize_for_layer
 from pyspark.sql.functions import (
     col, lit, coalesce, substring, sha2, concat_ws, when, 
     count, countDistinct, avg, sum, round, expr, monotonically_increasing_id, 
@@ -55,6 +59,9 @@ def get_spark_session():
             .config("spark.sql.shuffle.partitions", "8") \
             .config("spark.driver.memory", "2g") \
             .config("spark.executor.memory", "2g") \
+            .config("spark.sql.catalogImplementation", "hive") \
+            .config("hive.metastore.uris", "thrift://hive-metastore:9083") \
+            .enableHiveSupport() \
             .getOrCreate()
 
         spark.sparkContext.setLogLevel("WARN")
@@ -77,17 +84,22 @@ def read_silver_table(spark, table_name):
         raise
 
 def write_gold_table(df, table_name, partition_cols=None):
-    """Écriture optimisée vers Gold"""
+    """Écriture optimisée vers Gold ET enregistrement dans le metastore"""
     try:
-        path = f"s3a://{MINIO_CONFIG['gold_bucket']}/{table_name}"
+        # ✅ NOUVEAU: Écriture avec enregistrement dans le metastore
+        table_full_name = f"gold.{table_name}"
 
-        writer = df.coalesce(4).write.mode("overwrite")
+        writer = df.coalesce(4).write.mode("overwrite").format("parquet")
+
         if partition_cols:
             writer = writer.partitionBy(partition_cols)
 
-        writer.option("compression", "snappy").parquet(path)
+        writer.option("compression", "snappy") \
+              .option("path", f"s3a://{MINIO_CONFIG['gold_bucket']}/{table_name}") \
+              .saveAsTable(table_full_name)
+
         count = df.count()
-        print(f"  ✅ {table_name}: {count:,} lignes écrites")
+        print(f"  ✅ {table_full_name}: {count:,} lignes + enregistré dans metastore")
         return count
     except Exception as e:
         print(f"  ❌ Erreur écriture {table_name}: {e}")
@@ -697,6 +709,9 @@ def main():
     try:
         # Initialisation Spark
         spark = get_spark_session()
+
+        # Initialiser le schéma gold dans le metastore
+        initialize_for_layer(spark, "gold")
 
         # ÉTAPE 1: LECTURE DES DONNÉES SILVER
         print("\n" + "="*70)
