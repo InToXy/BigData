@@ -108,6 +108,7 @@ superset/init/
 # ENVIRONMENT & SECRETS
 # ============================================================
 # Environment variables
+.env
 .env.local
 .env.*.local
 *.env.backup
