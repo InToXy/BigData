@@ -71,10 +71,8 @@ airflow_db_data/
 metastore_db_data/
 
 # Airflow (commented out in docker-compose)
-airflow/
-dags/
-config/
-tools/
+airflow/Logs
+
 
 # ============================================================
 # SPARK & BIG DATA

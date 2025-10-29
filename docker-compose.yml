@@ -36,8 +36,6 @@ services:
       /usr/bin/mc mb myminio/bronze || true;
       /usr/bin/mc mb myminio/silver || true;
       /usr/bin/mc mb myminio/gold || true;
-      /usr/bin/mc mb myminio/warehouse || true;
-      /usr/bin/mc mb myminio/airflow-logs || true;
       echo 'Buckets MinIO créés';
       exit 0;
       "
@@ -86,95 +84,119 @@ services:
       echo 'Data import complete.'"
     restart: "no"
 
-  # # ============================================================
-  # # AIRFLOW
-  # # ============================================================
-  # airflow-db:
-  #   image: postgres:15-alpine
-  #   container_name: chu_airflow_db
-  #   environment:
-  #     POSTGRES_USER: airflow
-  #     POSTGRES_PASSWORD: airflow123
-  #     POSTGRES_DB: airflow
-  #   volumes:
-  #     - airflow_db_data:/var/lib/postgresql/data
-  #   networks:
-  #     - bigdata_network
-  #   restart: unless-stopped
+  # ============================================================
+  # AIRFLOW
+  # ============================================================
+  airflow-db:
+    image: postgres:15-alpine
+    container_name: chu_airflow_db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow123
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    networks:
+      - bigdata_network
+    restart: unless-stopped
 
-  # airflow-init:
-  #   image: apache/airflow:2.8.1-python3.11
-  #   container_name: chu_airflow_init
-  #   environment:
-  #     AIRFLOW_UID: '1000'
-  #     AIRFLOW__CORE__EXECUTOR: LocalExecutor
-  #     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow123@airflow-db/airflow
-  #     AIRFLOW__CORE__FERNET_KEY: 'UKMzEm3yIuFYEq1y3-2FxPNWSVwRASpahmQ9kQfEr8E='
-  #     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-  #     _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-postgres apache-airflow-providers-amazon pandas pyarrow boto3 psycopg2-binary s3fs
-  #   depends_on:
-  #     - airflow-db
-  #   networks:
-  #     - bigdata_network
-  #   volumes:
-  #     - ./airflow/dags:/opt/airflow/dags
-  #     - ./airflow/logs:/opt/airflow/logs
-  #   command: >
-  #     bash -c "
-  #       airflow db init &&
-  #       airflow users create --username admin --password admin123 --firstname Admin --lastname User --role Admin --email admin@chu.com || true
-  #     "
+  airflow-init:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: chu_airflow_init
+    environment:
+      AIRFLOW_UID: '1000'
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow123@airflow-db/airflow
+      AIRFLOW__CORE__FERNET_KEY: 'UKMzEm3yIuFYEq1y3-2FxPNWSVwRASpahmQ9kQfEr8E='
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-postgres pandas psycopg2-binary requests
+    depends_on:
+      - airflow-db
+    networks:
+      - bigdata_network
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./spark_jobs:/opt/airflow/spark_jobs
+      - ./jars:/opt/airflow/jars
+    command: >
+      bash -c "
+        airflow db init &&
+        airflow users create --username admin --password admin123 --firstname Admin --lastname User --role Admin --email admin@chu.com || true
+      "
 
-  # airflow-webserver:
-  #   image: apache/airflow:2.8.1-python3.11
-  #   container_name: chu_airflow_webserver
-  #   depends_on:
-  #     - airflow-init
-  #     - minio
-  #   environment:
-  #     AIRFLOW_UID: '1000'
-  #     AIRFLOW__CORE__EXECUTOR: LocalExecutor
-  #     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow123@airflow-db/airflow
-  #     AIRFLOW__CORE__FERNET_KEY: 'UKMzEm3yIuFYEq1y3-2FxPNWSVwRASpahmQ9kQfEr8E='
-  #     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-  #     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
-  #     # Connexion au PostgreSQL EXISTANT (bigdata_postgres)
-  #     AIRFLOW_CONN_POSTGRES_CHU: postgresql://admin:admin123@bigdata_postgres:5432/healthcare_data
-  #     _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-postgres apache-airflow-providers-amazon pandas pyarrow boto3 psycopg2-binary s3fs
-  #   ports:
-  #     - "8080:8080"
-  #   volumes:
-  #     - ./airflow/dags:/opt/airflow/dags
-  #     - ./airflow/logs:/opt/airflow/logs
-  #     - ./airflow/plugins:/opt/airflow/plugins
-  #     - ./data:/opt/airflow/data
-  #   networks:
-  #     - bigdata_network
-  #   restart: unless-stopped
-  #   command: airflow webserver
+  airflow-webserver:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: chu_airflow_webserver
+    depends_on:
+      - airflow-init
+      - minio
+    environment:
+      AIRFLOW_UID: '1000'
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow123@airflow-db/airflow
+      AIRFLOW__CORE__FERNET_KEY: 'UKMzEm3yIuFYEq1y3-2FxPNWSVwRASpahmQ9kQfEr8E='
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+      # Connexion au PostgreSQL EXISTANT (bigdata_postgres)
+      AIRFLOW_CONN_POSTGRES_CHU: postgresql://admin:admin123@bigdata_postgres:5432/healthcare_data
+      _PIP_ADDITIONAL_REQUIREMENTS: >-
+        apache-airflow-providers-postgres
+        pandas
+        psycopg2-binary
+        requests
+        papermill
+        ipykernel
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./data:/opt/airflow/data
+      - ./spark_jobs:/opt/airflow/spark_jobs
+      - ./jars:/opt/airflow/jars
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - bigdata_network
+    restart: unless-stopped
+    command: airflow webserver
+    group_add:
+      - "989"
 
-  # airflow-scheduler:
-  #   image: apache/airflow:2.8.1-python3.11
-  #   container_name: chu_airflow_scheduler
-  #   depends_on:
-  #     - airflow-webserver
-  #   environment:
-  #     AIRFLOW_UID: '1000'
-  #     AIRFLOW__CORE__EXECUTOR: LocalExecutor
-  #     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow123@airflow-db/airflow
-  #     AIRFLOW__CORE__FERNET_KEY: 'UKMzEm3yIuFYEq1y3-2FxPNWSVwRASpahmQ9kQfEr8E='
-  #     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-  #     AIRFLOW_CONN_POSTGRES_CHU: postgresql://admin:admin123@bigdata_postgres:5432/healthcare_data
-  #     _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-postgres apache-airflow-providers-amazon pandas pyarrow boto3 psycopg2-binary s3fs
-  #   volumes:
-  #     - ./airflow/dags:/opt/airflow/dags
-  #     - ./airflow/logs:/opt/airflow/logs
-  #     - ./airflow/plugins:/opt/airflow/plugins
-  #     - ./data:/opt/airflow/data
-  #   networks:
-  #     - bigdata_network
-  #   restart: unless-stopped
-  #   command: airflow scheduler
+  airflow-scheduler:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: chu_airflow_scheduler
+    depends_on:
+      - airflow-webserver
+    environment:
+      AIRFLOW_UID: '1000'
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow123@airflow-db/airflow
+      AIRFLOW__CORE__FERNET_KEY: 'UKMzEm3yIuFYEq1y3-2FxPNWSVwRASpahmQ9kQfEr8E='
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW_CONN_POSTGRES_CHU: postgresql://admin:admin123@bigdata_postgres:5432/healthcare_data
+      _PIP_ADDITIONAL_REQUIREMENTS: >-
+        apache-airflow-providers-postgres
+        pandas
+        psycopg2-binary
+        requests
+        papermill
+        ipykernel
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./data:/opt/airflow/data
+      - ./spark_jobs:/opt/airflow/spark_jobs
+      - ./jars:/opt/airflow/jars
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - bigdata_network
+    restart: unless-stopped
+    command: airflow scheduler
+    group_add:
+      - "989"
 
   # ============================================================
   # JUPYTER LAB
@@ -252,47 +274,6 @@ services:
       - mariadb
     networks:
       - bigdata_network
-
-  # # ============================================================
-  # # HIVE METASTORE
-  # # ============================================================
-  # metastore-postgres:
-  #   image: postgres:13
-  #   container_name: chu_metastore_postgres
-  #   environment:
-  #     POSTGRES_DB: metastore_db
-  #     POSTGRES_USER: metastore_user
-  #     POSTGRES_PASSWORD: metastore_password
-  #   volumes:
-  #     - metastore_postgres_data:/var/lib/postgresql/data
-  #     - ./docker/metastore/init.sql:/docker-entrypoint-initdb.d/init.sql
-  #   ports:
-  #     - "5433:5432"
-  #   networks:
-  #     - bigdata_network
-  #   restart: unless-stopped
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U metastore_user -d metastore_db"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
-
-  # hive-metastore:
-  #   build: ./docker/metastore
-  #   container_name: chu_hive_metastore
-  #   environment:
-  #     METASTORE_DB_HOSTNAME: metastore-postgres
-  #     METASTORE_TYPE: postgres
-  #   ports:
-  #     - "9083:9083"
-  #   depends_on:
-  #     metastore-postgres:
-  #       condition: service_healthy
-  #     minio:
-  #       condition: service_started
-  #   networks:
-  #     - bigdata_network
-  #   restart: unless-stopped
 
   # ============================================================
   # SUPERSET
