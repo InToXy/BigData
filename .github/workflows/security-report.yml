@@ -75,6 +75,7 @@ jobs:
         run: |
           echo -e "# Security Report for ${{ github.repository }}\n\n*Generated on $(date)*\n\n## Dependabot Alerts" > dependabot_report.md
 
+          # The '|| true' prevents the step from failing if the API call fails (e.g., permissions)
           alerts=$(gh api "repos/$GH_REPO/dependabot/alerts?state=open" --paginate -q '
             .[] | [
               .security_vulnerability.package.name,
@@ -82,16 +83,16 @@ jobs:
               .security_advisory.summary | gsub("\r\n|\n|\r"; " "),
               (.fixed_in // "N/A")
             ] | @tsv
-          ')
+          ' || true)
 
           if [ -n "$alerts" ]; then
             echo "| Package | Severity | Summary | Fixed In |" >> dependabot_report.md
             echo "|---|---|---|---|" >> dependabot_report.md
-            echo "$alerts" | while IFS=$ '\t' read -r name severity summary fixed_in; do
+            echo "$alerts" | while IFS=$'\t' read -r name severity summary fixed_in; do
               echo "| $name | $severity | $summary | $fixed_in |"
             done >> dependabot_report.md
           else
-            echo "No open Dependabot alerts found." >> dependabot_report.md
+            echo "No open Dependabot alerts found, or the workflow lacked permissions to read them." >> dependabot_report.md
           fi
 
       - name: Combine Reports
