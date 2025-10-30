@@ -35,7 +35,7 @@ jobs:
       - name: Prepare reporting tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip jq
+          sudo apt-get install -y python3-pip jq pandoc texlive-xetex texlive-fonts-recommended lmodern
           pip3 install tabulate
 
       - name: Generate CodeQL Markdown Report
@@ -98,15 +98,13 @@ jobs:
         run: cat dependabot_report.md codeql_report.md > final_report.md
 
       - name: Convert to PDF
-        uses: pandoc/pandoc-action@v4
-        with:
-          args: >-
-            --pdf-engine=xelatex
-            -V geometry:margin=1in
-            -V mainfont="DejaVu Sans"
-            --from=markdown
-            --output=security-report.pdf
-            final_report.md
+        run: |
+          pandoc final_report.md \
+            --from=markdown \
+            --pdf-engine=xelatex \
+            -V mainfont="DejaVu Sans" \
+            -V geometry:margin=1in \
+            -o security-report.pdf
 
       - name: Upload PDF report
         uses: actions/upload-artifact@v4
