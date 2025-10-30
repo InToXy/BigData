@@ -1,0 +1,115 @@
+name: Security Report
+
+on:
+  push:
+    branches: [ "main" ]
+  schedule:
+    - cron: '30 5 * * 1' # Runs at 5:30 AM UTC on Mondays
+
+permissions:
+  contents: read
+  security-events: write # Needed for CodeQL to upload results
+  actions: read
+
+jobs:
+  generate_report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          queries: +security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          output: ../results # Save SARIF file to a directory outside the checkout path
+
+      - name: Prepare reporting tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip jq
+          pip3 install tabulate
+
+      - name: Generate CodeQL Markdown Report
+        run: |
+          cat <<'EOF' > generate_codeql_report.py
+          import json, sys
+          from tabulate import tabulate
+          if len(sys.argv) < 2: sys.exit(0)
+          sarif_file = sys.argv[1]
+          report_data = []
+          try:
+              with open(sarif_file, 'r') as f: sarif_data = json.load(f)
+              for run in sarif_data.get('runs', []):
+                  rules = {rule['id']: rule for rule in run.get('tool', {}).get('driver', {}).get('rules', [])}
+                  for result in run.get('results', []):
+                      rule_id = result['ruleId']
+                      rule = rules.get(rule_id, {})
+                      report_data.append([
+                          rule.get('name', rule_id),
+                          result.get('level', 'note').capitalize(),
+                          result['message']['text'],
+                          f"{result['locations'][0]['physicalLocation']['artifactLocation']['uri']}:{result['locations'][0]['physicalLocation']['region']['startLine']}"
+                      ])
+          except (FileNotFoundError, json.JSONDecodeError): pass
+          if report_data:
+              print("\n\n## CodeQL Scan Results\n")
+              print(tabulate(report_data, ["Rule", "Severity", "Message", "Location"], tablefmt="pipe"))
+          else:
+              print("\n\n## CodeQL Scan Results\n\nNo issues found.")
+          EOF
+          python3 generate_codeql_report.py ../results/results.sarif > codeql_report.md
+
+      - name: Generate Dependabot Markdown Report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          echo -e "# Security Report for ${{ github.repository }}\n\n*Generated on $(date)*\n\n## Dependabot Alerts" > dependabot_report.md
+
+          alerts=$(gh api "repos/$GH_REPO/dependabot/alerts?state=open" --paginate -q '
+            .[] | [
+              .security_vulnerability.package.name,
+              .security_vulnerability.severity,
+              .security_advisory.summary | gsub("\r\n|\n|\r"; " "),
+              (.fixed_in // "N/A")
+            ] | @tsv
+          ')
+
+          if [ -n "$alerts" ]; then
+            echo "| Package | Severity | Summary | Fixed In |" >> dependabot_report.md
+            echo "|---|---|---|---|" >> dependabot_report.md
+            echo "$alerts" | while IFS=$ '\t' read -r name severity summary fixed_in; do
+              echo "| $name | $severity | $summary | $fixed_in |"
+            done >> dependabot_report.md
+          else
+            echo "No open Dependabot alerts found." >> dependabot_report.md
+          fi
+
+      - name: Combine Reports
+        run: cat dependabot_report.md codeql_report.md > final_report.md
+
+      - name: Convert to PDF
+        uses: pandoc/pandoc-action@v4
+        with:
+          args: >-
+            --pdf-engine=xelatex
+            -V geometry:margin=1in
+            -V mainfont="DejaVu Sans"
+            --from=markdown
+            --output=security-report.pdf
+            final_report.md
+
+      - name: Upload PDF report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security-report.pdf

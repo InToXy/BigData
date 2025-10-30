@@ -59,3 +59,16 @@ The main pipeline is defined in `airflow/dags/chu_docker_pipeline.py`.
     -   It uses Airflow's `DockerOperator` to run each Spark job in its own isolated container, ensuring reproducibility and dependency isolation.
     -   The tasks run sequentially: `bronze` -> `silver` -> `gold`.
     -   The DAG is scheduled to run daily at 2:00 AM but can also be triggered manually from the Airflow UI for on-demand executions.
+
+### Screenshots
+
+#### Architecture
+![Architecture Stack](capture/architecture_stack.png)
+
+#### Planning
+![Project Planning](capture/planning_projet.png)
+
+#### Superset Dashboards
+![Superset 1](capture/superset_1.png)
+![Superset 2](capture/superset_2.png)
+![Superset 3](capture/superset_3.png)
